@@ -28,7 +28,7 @@
       "padding": 1.1,
       "rule": "decor-must-remain-outside"
     },
-    "assetNaming": "<artworkName>-<number>.<ext>",
+    "assetNaming": "<artworkName>-<unique-name>.<ext>",
     "assetDirectories": {
       "2d": "apps/playground/src/assets/2d-assets",
       "3d": "apps/playground/src/assets/3d-assets"
@@ -101,7 +101,8 @@
       "volume": 0.78,
       "fadeInMs": 1100,
       "fadeOutMs": 1800
-    }
+    },
+    "assetNamingRule": "Assets are assigned by artworkName prefix. Any non-empty unique suffix is valid; numeric suffixes are optional."
   },
   "stations": [
     {
