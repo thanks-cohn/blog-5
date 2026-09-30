@@ -668,10 +668,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           0,
           Math.floor(Number(config.arrangement?.proxyCount ?? config.arrangement?.sphere?.defaultObjectCount ?? 10))
         );
-        const fallbackProxyCount = assets.length === 0
-          ? (proxyCount || Number(config.arrangement?.sphere?.defaultObjectCount) || 10)
-          : 0;
-        const extraProxyCount = displayMode === "assets-and-proxies" ? proxyCount : fallbackProxyCount;
+        const extraProxyCount = displayMode === "assets-and-proxies" ? proxyCount : 0;
         for (let i = 0; i < extraProxyCount; i++) {
           result.push({
             name: `${station.artworkName}-proxy-${i + 1}`,
@@ -1957,6 +1954,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       let cameraZ = 9;
       let targetZ = stationZ(0) + presentationSettings.camera.distanceFromCenter;
       let arrivingAt = 0;
+      let railRideDirection: -1 | 1 = 1;
       let lookYaw = 0;
       let lookPitch = 0;
       let targetYaw = 0;
@@ -3683,10 +3681,16 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         const canRide = arrived() && !focusExperience && presentationSettings.editor.mode === "none";
         railRideNext.hidden = !canRide;
         if (!canRide) return;
+        const nextIndex = arrivingAt + railRideDirection;
+        const goingBack = railRideDirection < 0;
         railRideNext.textContent =
-          arrivingAt >= stations.length - 1
-            ? "Take the Roller Coaster · Back to Start"
-            : "Take the Roller Coaster";
+          goingBack
+            ? "Take the Roller Coaster · Back"
+            : "Take the Roller Coaster · Forward";
+        railRideNext.setAttribute(
+          "aria-label",
+          `Take the roller coaster ${goingBack ? "backward" : "forward"} to ${stations[nextIndex]?.label ?? "the next plane"}`
+        );
       }
 
       function requestStation(index: number, preservePendingFocus = false) {
@@ -3892,7 +3896,18 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           advanceFocusPlaylist();
         });
 
-        void audio.play().catch(() => {});
+        const playAttempt = audio.play();
+        void playAttempt.catch((error) => {
+          if (focusAudioElement !== audio) return;
+          status && (status.textContent = `Audio waiting for interaction · ${assetName}`);
+          window.dispatchEvent(new CustomEvent("webrev:focus-audio-playback-error", {
+            detail: {
+              assetName,
+              url,
+              message: error instanceof Error ? error.message : String(error)
+            }
+          }));
+        });
       }
 
       function primeFocusAudio(obj: SceneObject) {
@@ -3985,6 +4000,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (!audio || !presentationSettings.focusAudio.enabled) return;
 
         const targetVolume = Math.max(0, Math.min(1, presentationSettings.focusAudio.volume));
+        const startVolume = Math.max(0, Math.min(targetVolume, audio.volume));
         const duration = Math.max(0, presentationSettings.focusAudio.fadeInMs);
         const startedAt = performance.now();
 
@@ -3996,7 +4012,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         const step = (now: number) => {
           if (focusAudioElement !== audio) return;
           const t = Math.min(1, (now - startedAt) / duration);
-          audio.volume = targetVolume * t;
+          audio.volume = startVolume + (targetVolume - startVolume) * t;
           if (t < 1) focusAudioFadeFrame = requestAnimationFrame(step);
           else focusAudioFadeFrame = 0;
         };
@@ -4649,6 +4665,16 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         }
       });
 
+      const retryFocusAudioFromGesture = () => {
+        const audio = focusAudioElement;
+        if (!audio || !audio.paused || !focusAudioSourceUrl) return;
+        void audio.play().then(() => {
+          if (focusExperience?.settled) fadeInFocusAudio();
+        }).catch(() => {});
+      };
+
+      gameCanvas.addEventListener("pointerdown", retryFocusAudioFromGesture, { capture: true });
+
       gameCanvas.addEventListener("click", (event) => {
         if (!arrived() || draggedDistance >= 6) return;
         const rect = gameCanvas.getBoundingClientRect();
@@ -4676,18 +4702,23 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       });
 
       railRideNext?.addEventListener("click", () => {
-        if (!arrived() || focusExperience) return;
-        const nextIndex = arrivingAt >= stations.length - 1 ? 0 : arrivingAt + 1;
-        requestStation(nextIndex);
+        if (!arrived() || focusExperience || stations.length < 2) return;
+
+        if (arrivingAt >= stations.length - 1) railRideDirection = -1;
+        else if (arrivingAt <= 0) railRideDirection = 1;
+
+        requestStation(arrivingAt + railRideDirection);
       });
 
       window.addEventListener("keydown", (event) => {
         if (event.key === "ArrowRight") {
           event.preventDefault();
+          railRideDirection = 1;
           requestStation(Math.min(stations.length - 1, arrivingAt + 1));
         }
         if (event.key === "ArrowLeft") {
           event.preventDefault();
+          railRideDirection = -1;
           requestStation(Math.max(0, arrivingAt - 1));
         }
         if (event.key === "Home") requestStation(0);
