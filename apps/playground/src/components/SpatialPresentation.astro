@@ -46,13 +46,21 @@ const musicTracks = Object.entries(discoveredMusic)
   .sort((a, b) => a.name.localeCompare(b.name));
 
 const assetsByArtwork: Record<string, DiscoveredAsset[]> = {};
+const artworkNames = Array.from(
+  new Set(
+    (Array.isArray(config?.stations) ? config.stations : [])
+      .map((station: any) => String(station?.artworkName ?? "").trim())
+      .filter(Boolean)
+  )
+).sort((a, b) => b.length - a.length);
 
 function registerAsset(path: string, url: string, kind: "2d" | "3d") {
   const file = path.split("/").pop() ?? "";
   const base = file.replace(/\.[^.]+$/, "");
-  const match = base.match(/^(.*?)-(\d+)$/);
-  if (!match) return;
-  const artworkName = match[1];
+  const artworkName = artworkNames.find(
+    (name) => base.startsWith(`${name}-`) && base.length > name.length + 1
+  );
+  if (!artworkName) return;
   (assetsByArtwork[artworkName] ??= []).push({ name: file, url, kind });
 }
 
