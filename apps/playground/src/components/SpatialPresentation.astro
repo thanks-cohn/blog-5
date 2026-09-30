@@ -7,7 +7,7 @@ export interface Props {
 
 const { config, homeHref, links } = Astro.props;
 
-type DiscoveredAsset = { name: string; url: string; kind: "2d" | "3d" };
+type DiscoveredAsset = { name: string; url: string; kind: "2d" | "3d"; initialStationId?: string };
 
 const discovered2d = import.meta.glob("../assets/2d-assets/*.{png,jpg,jpeg,webp,avif,svg}", {
   eager: true,
@@ -46,9 +46,11 @@ const musicTracks = Object.entries(discoveredMusic)
   .sort((a, b) => a.name.localeCompare(b.name));
 
 const assetsByArtwork: Record<string, DiscoveredAsset[]> = {};
+const assetInventory: DiscoveredAsset[] = [];
+const stationDefinitionsForImport = Array.isArray(config?.stations) ? config.stations : [];
 const artworkNames: string[] = Array.from(
   new Set<string>(
-    (Array.isArray(config?.stations) ? config.stations : [])
+    stationDefinitionsForImport
       .map((station: any) => String(station?.artworkName ?? "").trim())
       .filter((name: string) => name.length > 0)
   )
@@ -60,14 +62,25 @@ function registerAsset(path: string, url: string, kind: "2d" | "3d") {
   const artworkName = artworkNames.find(
     (name) => base.startsWith(`${name}-`) && base.length > name.length + 1
   );
-  if (!artworkName) return;
-  (assetsByArtwork[artworkName] ??= []).push({ name: file, url, kind });
+  const initialStationId = artworkName
+    ? stationDefinitionsForImport.find((station: any) => station.artworkName === artworkName)?.id
+    : undefined;
+  const asset: DiscoveredAsset = { name: file, url, kind, initialStationId };
+  assetInventory.push(asset);
+  if (artworkName) (assetsByArtwork[artworkName] ??= []).push(asset);
 }
 
 for (const [path, url] of Object.entries(discovered2d)) registerAsset(path, url, "2d");
 for (const [path, url] of Object.entries(discovered3d)) registerAsset(path, url, "3d");
 
-const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, musicTracks, resolvedLinks: links };
+const runtimeConfig = {
+  ...config,
+  assetsByArtwork,
+  assetInventory,
+  centerImagesByArtwork,
+  musicTracks,
+  resolvedLinks: links
+};
 ---
 
 <div
@@ -358,7 +371,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         reset(key?: PresentationSettingKey): PresentationSettingsSnapshot;
         subscribe(listener: SettingsListener): () => void;
         describeSettings(stationId?: string): SettingDescriptor[];
-        listAssets(stationId?: string): Array<{ name: string; hemisphere: AssetHemisphere; visible: boolean; motion: ObjectMotion; kind: "2d" | "3d"; uploaded: boolean; focusTrack?: string; runtimeStatus?: GlbRuntimeStatus; loadAttempts?: number }>;
+        listAssets(stationId?: string): Array<{ name: string; stationId: string; hemisphere: AssetHemisphere; visible: boolean; motion: ObjectMotion; kind: "2d" | "3d"; uploaded: boolean; focusTrack?: string; runtimeStatus?: GlbRuntimeStatus; loadAttempts?: number }>;
+        listAssetLibrary(): Array<{ name: string; stationId: string; kind: "2d" | "3d"; uploaded: boolean }>;
+        getAssetStation(name: string): string | null;
+        setAssetStation(name: string, stationId: string): void;
         setAssetHemisphere(name: string, hemisphere: AssetHemisphere): void;
         setAssetVisible(name: string, visible: boolean): void;
         getAssetMotion(name: string): ObjectMotion | null;
@@ -632,6 +648,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     // Existing v2 data could leave uploaded GLBs permanently hidden on a browser
     // even though the current presentation config expects them visible by default.
     const assetPlacementStorageKey = "webrev:asset-placement:v3";
+    const assetStationStorageKey = "webrev:asset-station:v1";
     const assetMotionStorageKey = "webrev:asset-motion:v1";
     const assetFocusAudioStorageKey = "webrev:asset-focus-audio:v1";
     const spatialEnvelopeStorageKey = "webrev:spatial-envelope:v1";
@@ -647,19 +664,49 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       }
     }
 
+    function inferredStationForAsset(asset: any) {
+      if (typeof asset?.initialStationId === "string" && asset.initialStationId) {
+        return asset.initialStationId;
+      }
+      return stationDefinitions[0]?.id ?? "default";
+    }
+
+    function loadAssetStationState() {
+      let stored: Record<string, string> = {};
+      try {
+        stored = JSON.parse(window.localStorage.getItem(assetStationStorageKey) ?? "{}");
+      } catch {}
+
+      const state: Record<string, string> = {};
+      for (const asset of Array.isArray(config.assetInventory) ? config.assetInventory : []) {
+        const requested = stored?.[asset.name];
+        const valid = stationDefinitions.some((station: any) => station.id === requested);
+        state[asset.name] = valid ? requested : inferredStationForAsset(asset);
+      }
+      return state;
+    }
+
+    let assetStationState = loadAssetStationState();
+
+    function saveAssetStationState() {
+      try {
+        window.localStorage.setItem(assetStationStorageKey, JSON.stringify(assetStationState));
+      } catch {}
+      window.dispatchEvent(new CustomEvent("webrev:asset-station", { detail: assetStationState }));
+    }
+
     function allSceneAssetNames() {
       const result: Array<{ name: string; stationId: string; kind: "2d" | "3d"; uploaded: boolean }> = [];
-      for (const station of stationDefinitions) {
-        const assets = Array.isArray(config.assetsByArtwork?.[station.artworkName])
-          ? config.assetsByArtwork[station.artworkName]
-          : [];
-        for (const asset of assets) result.push({
+      for (const asset of Array.isArray(config.assetInventory) ? config.assetInventory : []) {
+        result.push({
           name: asset.name,
-          stationId: station.id,
+          stationId: assetStationState[asset.name] ?? inferredStationForAsset(asset),
           kind: asset.kind === "2d" ? "2d" : "3d",
           uploaded: true
         });
+      }
 
+      for (const station of stationDefinitions) {
         const requestedDisplayMode = station.assetDisplayMode ?? config.arrangement?.assetDisplayMode;
         const displayMode = requestedDisplayMode === "assets-and-proxies"
           ? "assets-and-proxies"
@@ -1692,6 +1739,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           };
           return {
             name: asset.name,
+            stationId: asset.stationId,
             ...state,
             motion: assetMotionState[asset.name] ?? configuredMotionFor(asset.name),
             kind: asset.kind,
@@ -1709,6 +1757,22 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
               : undefined
           };
         });
+      },
+      listAssetLibrary() {
+        return allSceneAssetNames().filter((asset) => asset.uploaded);
+      },
+      getAssetStation(name: string) {
+        const asset = allSceneAssetNames().find((candidate) => candidate.name === name && candidate.uploaded);
+        return asset?.stationId ?? null;
+      },
+      setAssetStation(name: string, stationId: string) {
+        const asset = allSceneAssetNames().find((candidate) => candidate.name === name && candidate.uploaded);
+        if (!asset) return;
+        if (!stationDefinitions.some((station: any) => station.id === stationId)) return;
+        assetStationState[name] = stationId;
+        saveAssetStationState();
+        rebuildAssetLayouts();
+        renderSphereSettings();
       },
       setAssetHemisphere(name: string, hemisphere: AssetHemisphere) {
         assetPlacement[name] ??= { hemisphere: "front", visible: true };
@@ -1990,10 +2054,17 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       let focusExperience: FocusExperienceState | null = null;
       let pendingFocusPlaylistEntry: FocusPlaylistEntry | null = null;
 
-      const layouts = stations.map((station: any, index: number) => generateLayout(station, index));
+      let layouts = stations.map((station: any, index: number) => generateLayout(station, index));
       ensureThree();
       for (const layout of layouts) {
         for (const obj of layout) ensureThreeObject(obj);
+      }
+
+      function rebuildAssetLayouts() {
+        layouts = stations.map((station: any, index: number) => generateLayout(station, index));
+        for (const layout of layouts) {
+          for (const obj of layout) ensureThreeObject(obj);
+        }
       }
 
       function makeAssetRow(obj: SceneObject) {
@@ -2070,7 +2141,21 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           window.webrevPresentationSettings?.setAssetVisible(obj.name, false);
         });
 
-        row.append(name, side, motionSelect, remove);
+        const stationSelect = document.createElement("select");
+        stationSelect.className = "sphere-motion-select";
+        stationSelect.setAttribute("aria-label", `Plane for ${asset.name}`);
+        for (const station of stations) {
+          const option = document.createElement("option");
+          option.value = station.id;
+          option.textContent = station.label ?? station.id;
+          option.selected = station.id === asset.stationId;
+          stationSelect.appendChild(option);
+        }
+        stationSelect.addEventListener("change", () => {
+          window.webrevPresentationSettings?.setAssetStation(asset.name, stationSelect.value);
+        });
+
+        row.append(name, stationSelect, side, motionSelect, remove);
         return row;
       }
 
@@ -2337,7 +2422,11 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         backAssetsList.replaceChildren();
 
         const assets = api.listAssets(activeStationId);
-        const hidden = assets.filter((asset) => asset.visible === false);
+        const library = api.listAssetLibrary();
+        const hidden = library
+          .filter((asset) => asset.stationId === activeStationId)
+          .map((asset) => api.listAssets(activeStationId).find((current) => current.name === asset.name))
+          .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset && asset.visible === false));
 
         for (const asset of assets.filter((asset) => asset.visible !== false && asset.hemisphere !== "back")) {
           frontAssetsList.appendChild(makeAssetRowFromApi(asset));
@@ -2395,6 +2484,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         targetZ = stationZ(arrivingAt) + presentationSettings.camera.distanceFromCenter;
         syncLiveFocusAudio();
         renderSphereSettings();
+      });
+      window.addEventListener("webrev:asset-station", () => {
+        rebuildAssetLayouts();
+        if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
       window.addEventListener("webrev:asset-placement", () => {
         syncAssetPlacementToLayouts();
@@ -2664,9 +2757,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
 
       function generateLayout(station: any, index: number): SceneObject[] {
         const rand = rngFor(station, index);
-        const allDiscovered = Array.isArray(assetsByArtwork[station.artworkName])
-          ? assetsByArtwork[station.artworkName]
-          : [];
+        const allDiscovered = (Array.isArray(config.assetInventory) ? config.assetInventory : [])
+          .filter((asset: any) =>
+            (assetStationState[asset.name] ?? inferredStationForAsset(asset)) === station.id
+          );
         const displayMainImageAsFloatingObject =
           station?.mainImage?.displayAsFloatingObject ??
           arrangement?.mainImage?.displayAsFloatingObject ??
