@@ -70,6 +70,12 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
 >
   <canvas id="prism-rail-canvas" aria-label="Do It Your Way spatial presentation"></canvas>
   <canvas id="glb-layer" aria-hidden="true"></canvas>
+  <button type="button" id="focus-song-prev" class="focus-song-overlay focus-song-overlay-left" aria-label="Previous song and object">
+    <span aria-hidden="true">‹</span>
+  </button>
+  <button type="button" id="focus-song-next" class="focus-song-overlay focus-song-overlay-right" aria-label="Next song and object">
+    <span aria-hidden="true">›</span>
+  </button>
   <div class="sr-only" aria-live="polite" id="presentation-status"></div>
   <div id="edit-context-menu" class="edit-context-menu" hidden></div>
 
@@ -368,6 +374,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
   const frontAssetsList = document.getElementById("front-assets-list");
   const backAssetsList = document.getElementById("back-assets-list");
   const editContextMenu = document.getElementById("edit-context-menu") as HTMLDivElement | null;
+  const focusSongPrev = document.getElementById("focus-song-prev") as HTMLButtonElement | null;
+  const focusSongNext = document.getElementById("focus-song-next") as HTMLButtonElement | null;
 
   let threeRenderer: any = null;
   let threeScene: any = null;
@@ -4075,6 +4083,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       }
 
       function requestFocusExperience(obj: SceneObject) {
+        // Selecting a different GLB is always authoritative, even while another
+        // focus song is already playing. The existing audio source is stopped
+        // and the newly paired track is primed immediately from this user gesture.
         primeFocusAudio(obj);
         beginFocusExperience(obj);
         window.dispatchEvent(new CustomEvent("webrev:focus-experience-request", {
@@ -4088,6 +4099,42 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           }
         }));
         status && (status.textContent = `Come Into Our World · ${obj.name}`);
+      }
+
+      function focusPlaylistEntry(entry: FocusPlaylistEntry | undefined) {
+        if (!entry) return;
+        if (entry.stationIndex !== arrivingAt) {
+          requestStation(entry.stationIndex);
+        }
+        const obj = (layouts[entry.stationIndex] ?? []).find(
+          (candidate: SceneObject) =>
+            candidate.kind === "3d" &&
+            candidate.visible !== false &&
+            candidate.name === entry.assetName
+        );
+        if (!obj) return;
+        requestFocusExperience(obj);
+      }
+
+      function stepFocusPlaylist(direction: -1 | 1) {
+        const playlist = resolvedFocusPlaylist();
+        if (!playlist.length) return;
+
+        let index = playlist.findIndex(
+          (entry) =>
+            entry.assetName === focusAudioCurrentAssetName &&
+            entry.url === focusAudioSourceUrl
+        );
+        if (index < 0 && focusExperience) {
+          index = playlist.findIndex(
+            (entry) => entry.assetName === focusExperience?.object.name
+          );
+        }
+        if (index < 0) index = direction > 0 ? -1 : 0;
+
+        const nextIndex =
+          (index + direction + playlist.length) % playlist.length;
+        focusPlaylistEntry(playlist[nextIndex]);
       }
 
       function openExperienceContextMenu(clientX: number, clientY: number, obj: SceneObject | null) {
@@ -4306,7 +4353,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         const wasClick = draggedDistance < 6;
         grabbed = null;
         if (gameCanvas.hasPointerCapture(event.pointerId)) gameCanvas.releasePointerCapture(event.pointerId);
-        if (wasClick) executeAction(obj.action);
+        if (wasClick && obj.kind !== "3d") executeAction(obj.action);
       }
 
       gameCanvas.addEventListener("pointerup", releasePointer);
@@ -4324,9 +4371,25 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         const rect = gameCanvas.getBoundingClientRect();
         const x = event.clientX - rect.left;
         const y = event.clientY - rect.top;
-        if (findHitObject(x, y)) return;
+        const hit = findHitObject(x, y);
+        if (hit) {
+          if (hit.kind === "3d" && hit.visible !== false) {
+            requestFocusExperience(hit);
+          }
+          return;
+        }
+      });
 
-        
+      focusSongPrev?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        stepFocusPlaylist(-1);
+      });
+
+      focusSongNext?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        stepFocusPlaylist(1);
       });
 
       window.addEventListener("keydown", (event) => {
@@ -4379,7 +4442,69 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     background:transparent;
   }
 
-  .sphere-settings-toggle {
+  .focus-song-overlay {
+    position:absolute;
+    z-index:3;
+    top:18%;
+    bottom:18%;
+    width:clamp(54px, 11vw, 150px);
+    border:0;
+    padding:0;
+    background:linear-gradient(to var(--edge-direction), rgba(3,4,5,.38), rgba(3,4,5,0));
+    color:rgba(255,255,255,.72);
+    cursor:pointer;
+    touch-action:manipulation;
+    display:flex;
+    align-items:center;
+    opacity:.58;
+    transition:opacity 160ms ease, background 160ms ease;
+  }
+
+  .focus-song-overlay span {
+    font:300 clamp(40px, 7vw, 82px)/1 ui-sans-serif,system-ui;
+    text-shadow:0 2px 18px rgba(0,0,0,.55);
+    pointer-events:none;
+  }
+
+  .focus-song-overlay-left {
+    --edge-direction: right;
+    left:0;
+    justify-content:flex-start;
+    padding-left:clamp(10px, 2vw, 28px);
+  }
+
+  .focus-song-overlay-right {
+    --edge-direction: left;
+    right:0;
+    justify-content:flex-end;
+    padding-right:clamp(10px, 2vw, 28px);
+  }
+
+  .focus-song-overlay:hover,
+  .focus-song-overlay:focus-visible {
+    opacity:1;
+    background:linear-gradient(to var(--edge-direction), rgba(3,4,5,.62), rgba(3,4,5,0));
+    outline:none;
+  }
+
+  .focus-song-overlay:active {
+    opacity:1;
+  }
+
+  @media (max-width: 640px) {
+    .focus-song-overlay {
+      top:22%;
+      bottom:22%;
+      width:64px;
+      opacity:.72;
+    }
+
+    .focus-song-overlay span {
+      font-size:52px;
+    }
+  }
+
+    .sphere-settings-toggle {
     position:absolute;
     z-index:4;
     top:18px;
