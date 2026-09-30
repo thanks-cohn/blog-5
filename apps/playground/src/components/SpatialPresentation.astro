@@ -2294,6 +2294,9 @@ const runtimeConfig = {
       };
       let focusExperience: FocusExperienceState | null = null;
       let pendingFocusPlaylistEntry: FocusPlaylistEntry | null = null;
+      let journeyEntries: FocusPlaylistEntry[] = [];
+      let journeyCursor = -1;
+      let journeyStationIndex = -1;
 
       let layouts = stations.map((station: any, index: number) => generateLayout(station, index));
       captureStylePositions = () => {
@@ -4132,7 +4135,12 @@ const runtimeConfig = {
       }
 
       function requestStation(index: number, preservePendingFocus = false) {
-        if (!preservePendingFocus) pendingFocusPlaylistEntry = null;
+        if (!preservePendingFocus) {
+          pendingFocusPlaylistEntry = null;
+          journeyEntries = [];
+          journeyCursor = -1;
+          journeyStationIndex = -1;
+        }
         endFocusExperience();
         arrivingAt = Math.max(0, Math.min(stations.length - 1, index));
         activeStationId = stations[arrivingAt]?.id ?? activeStationId;
@@ -4372,70 +4380,135 @@ const runtimeConfig = {
         return fallback[index % fallback.length] ?? fallback[0] ?? null;
       }
 
-      function firstJourneyObject(stationIndex: number) {
-        return visiblePlaneGlbs(stationIndex)[0] ?? null;
+      function planeJourneyEntries(stationIndex: number) {
+        const previousScope = presentationSettings.focusAudio.scope;
+        presentationSettings.focusAudio.scope = "all";
+        const entries = resolvedFocusPlaylist()
+          .filter((entry) => entry.stationIndex === stationIndex);
+        presentationSettings.focusAudio.scope = previousScope;
+        return entries;
       }
 
-      function startJourneyObject(obj: SceneObject) {
-        const track = focusTrackForObject(obj);
+      function rotateJourneyEntries(
+        entries: FocusPlaylistEntry[],
+        assetName: string,
+        trackName?: string
+      ) {
+        if (!entries.length) return [];
+        let startIndex = entries.findIndex(
+          (entry) =>
+            entry.assetName === assetName &&
+            (!trackName || entry.track === trackName)
+        );
+        if (startIndex < 0) {
+          startIndex = entries.findIndex((entry) => entry.assetName === assetName);
+        }
+        if (startIndex < 0) startIndex = 0;
+        return [...entries.slice(startIndex), ...entries.slice(0, startIndex)];
+      }
+
+      function playJourneyEntry(entry: FocusPlaylistEntry) {
+        const obj = (layouts[entry.stationIndex] ?? []).find(
+          (candidate: SceneObject) =>
+            candidate.kind === "3d" &&
+            candidate.visible !== false &&
+            candidate.name === entry.assetName
+        );
+        if (!obj) return;
         requestFocusExperience(
           obj,
-          track ? { url: track.url, track: track.name } : undefined
+          entry.url ? { url: entry.url, track: entry.track } : undefined
         );
+      }
+
+      function beginJourneyFromObject(obj: SceneObject) {
+        const track = focusTrackForObject(obj);
+        const entries = planeJourneyEntries(arrivingAt);
+        journeyEntries = rotateJourneyEntries(
+          entries,
+          obj.name,
+          track?.name
+        );
+        journeyCursor = 0;
+        journeyStationIndex = arrivingAt;
+
+        const first = journeyEntries[0];
+        if (first) {
+          playJourneyEntry(first);
+        } else {
+          requestFocusExperience(
+            obj,
+            track ? { url: track.url, track: track.name } : undefined
+          );
+        }
       }
 
       function continueJourneyToNextPlane() {
         if (!stations.length) return;
         const nextStationIndex = (arrivingAt + 1) % stations.length;
-        const nextObject = firstJourneyObject(nextStationIndex);
+        const nextEntries = planeJourneyEntries(nextStationIndex);
+        const next = nextEntries[0];
 
-        if (!nextObject) {
+        journeyEntries = nextEntries;
+        journeyCursor = next ? 0 : -1;
+        journeyStationIndex = nextStationIndex;
+
+        if (!next) {
           requestStation(nextStationIndex);
           return;
         }
 
-        const track = focusTrackForObject(nextObject);
-        pendingFocusPlaylistEntry = {
-          stationId: stations[nextStationIndex]?.id ?? "",
-          stationIndex: nextStationIndex,
-          assetName: nextObject.name,
-          track: track?.name ?? "",
-          url: track?.url ?? ""
-        };
+        pendingFocusPlaylistEntry = next;
         requestStation(nextStationIndex, true);
       }
 
       function stepFocusObject(direction: -1 | 1) {
         if (!focusExperience) return;
-        const stationIndex = focusExperience.stationIndex;
-        const objects = visiblePlaneGlbs(stationIndex);
-        if (!objects.length) return;
 
-        let index = objects.findIndex(
-          (obj: SceneObject) => obj.name === focusExperience?.object.name
-        );
-        if (index < 0) index = direction > 0 ? -1 : 0;
-
-        if (direction > 0 && index >= objects.length - 1) {
-          continueJourneyToNextPlane();
-          return;
+        if (
+          journeyStationIndex !== focusExperience.stationIndex ||
+          !journeyEntries.length
+        ) {
+          const currentTrack = trackCatalog().find(
+            (track: { name: string; url: string }) =>
+              track.url === focusAudioSourceUrl
+          );
+          journeyEntries = rotateJourneyEntries(
+            planeJourneyEntries(focusExperience.stationIndex),
+            focusExperience.object.name,
+            currentTrack?.name
+          );
+          journeyCursor = 0;
+          journeyStationIndex = focusExperience.stationIndex;
         }
 
-        const nextIndex =
-          direction < 0 && index <= 0
-            ? objects.length - 1
-            : index + direction;
-        const next = objects[nextIndex];
-        if (!next) return;
+        if (!journeyEntries.length) return;
 
-        startJourneyObject(next);
+        if (direction > 0) {
+          if (journeyCursor >= journeyEntries.length - 1) {
+            continueJourneyToNextPlane();
+            return;
+          }
+          journeyCursor += 1;
+        } else {
+          journeyCursor =
+            journeyCursor <= 0
+              ? journeyEntries.length - 1
+              : journeyCursor - 1;
+        }
+
+        const next = journeyEntries[journeyCursor];
+        if (!next) return;
+        playJourneyEntry(next);
 
         window.dispatchEvent(new CustomEvent("webrev:focus-object-step", {
           detail: {
             direction,
-            stationId: stations[stationIndex]?.id ?? activeStationId,
-            objectName: next.name,
-            track: focusTrackForObject(next)?.name ?? ""
+            stationId: next.stationId,
+            objectName: next.assetName,
+            track: next.track,
+            journeyIndex: journeyCursor,
+            journeyLength: journeyEntries.length
           }
         }));
       }
@@ -4499,8 +4572,8 @@ const runtimeConfig = {
       function advanceFocusPlaylist() {
         if (!focusExperience || presentationSettings.focusAudio.playbackMode === "loop-item") return;
 
-        // While focused on a plane, song completion advances to the next GLB on
-        // that same plane and wraps after the final object.
+        // While focused, song completion advances through the same song journey.
+        // The roller coaster is entered only after every song on this plane has played once.
         if (focusExperience.stationIndex === arrivingAt) {
           stepFocusObject(1);
           return;
@@ -5059,7 +5132,7 @@ const runtimeConfig = {
           objectHeading.className = "edit-context-heading";
           objectHeading.textContent = obj.name;
           editContextMenu.appendChild(objectHeading);
-          addEditContextAction("Play This", () => startJourneyObject(obj));
+          addEditContextAction("Play This", () => beginJourneyFromObject(obj));
         }
 
         editContextMenu.style.left = `${Math.max(8, Math.min(window.innerWidth - 290, clientX))}px`;
@@ -5258,7 +5331,7 @@ const runtimeConfig = {
           obj.visible !== false &&
           journeyClickStartEnabled
         ) {
-          startJourneyObject(obj);
+          beginJourneyFromObject(obj);
         } else if (wasClick && obj.kind !== "3d") {
           executeAction(obj.action);
         }
@@ -5297,7 +5370,7 @@ const runtimeConfig = {
             journeyClickStartEnabled
           ) {
             const track = focusTrackForObject(hit);
-            startJourneyObject(hit);
+            beginJourneyFromObject(hit);
             status && (status.textContent =
               track
                 ? `Playing ${track.name.replace(/\.[^.]+$/, "")} · ${hit.name}`
