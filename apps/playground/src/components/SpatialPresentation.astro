@@ -586,7 +586,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     const config = JSON.parse(root.dataset.config ?? "{}");
     const settingsStorageKey = "webrev:spatial-settings:v3";
     const legacySettingsStorageKey = "webrev:spatial-settings:v2";
-    const assetPlacementStorageKey = "webrev:asset-placement:v2";
+    // v3 intentionally invalidates stale desktop visibility state from older builds.
+    // Existing v2 data could leave uploaded GLBs permanently hidden on a browser
+    // even though the current presentation config expects them visible by default.
+    const assetPlacementStorageKey = "webrev:asset-placement:v3";
     const assetMotionStorageKey = "webrev:asset-motion:v1";
     const assetFocusAudioStorageKey = "webrev:asset-focus-audio:v1";
     const spatialEnvelopeStorageKey = "webrev:spatial-envelope:v1";
