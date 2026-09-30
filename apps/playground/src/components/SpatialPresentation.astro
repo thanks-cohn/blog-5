@@ -1744,7 +1744,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         return publishSettings();
       },
       setFocusPlaybackScope(scope: FocusPlaybackScope) {
-        presentationSettings.focusAudio.scope = scope === "all" ? "all" : "station";
+        const normalized = scope === "all" ? "all" : "station";
+        presentationSettings.focusAudio.scope = normalized;
+        focusPlaybackProgram = { ...focusPlaybackProgram, scope: normalized };
         return publishSettings();
       },
       getFocusPlaybackProgram() {
@@ -1776,6 +1778,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         };
         focusPlaybackProgram = next;
         presentationSettings.focusAudio.scope = next.scope === "station" ? "station" : "all";
+        for (const settings of Object.values(stationSettings)) {
+          settings.focusAudio.scope = presentationSettings.focusAudio.scope;
+          settings.focusAudio.playbackMode = "zone-cycle";
+        }
         window.dispatchEvent(new CustomEvent("webrev:focus-playback-program", {
           detail: JSON.parse(JSON.stringify(next))
         }));
@@ -3708,12 +3714,15 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
             .filter((track: any) => typeof track?.name === "string" && typeof track?.url === "string")
             .map((track: any) => [String(track.name), String(track.url)])
         );
+
+        const effectiveScope =
+          focusPlaybackProgram.scope === "station" ? "station" : "all";
         const stationIndexes =
-          presentationSettings.focusAudio.scope === "all"
+          effectiveScope === "all"
             ? stations.map((_: any, index: number) => index)
             : [arrivingAt];
 
-        const playlist: FocusPlaylistEntry[] = [];
+        const base: FocusPlaylistEntry[] = [];
         for (const stationIndex of stationIndexes) {
           const station = stations[stationIndex];
           if (!station) continue;
@@ -3724,7 +3733,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
             if (!assigned) continue;
             const url = trackUrl.get(assigned);
             if (!url) continue;
-            playlist.push({
+            base.push({
               stationId: station.id,
               stationIndex,
               assetName: obj.name,
@@ -3733,7 +3742,76 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
             });
           }
         }
-        return playlist;
+
+        const sequence = Array.isArray(focusPlaybackProgram.sequence)
+          ? focusPlaybackProgram.sequence
+          : [];
+        const pools = Array.isArray(focusPlaybackProgram.pools)
+          ? focusPlaybackProgram.pools
+          : [];
+
+        if (!sequence.length) return base;
+
+        const byPool = new Map(
+          pools.map((pool) => [String(pool.id), pool] as const)
+        );
+        const resolved: FocusPlaylistEntry[] = [];
+
+        const appendMatches = (matches: FocusPlaylistEntry[], order: FocusPlaybackOrder = "ordered", repeat: number | "forever" = 1) => {
+          const source = [...matches];
+          if (order === "random") {
+            for (let i = source.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [source[i], source[j]] = [source[j], source[i]];
+            }
+          }
+          const count = repeat === "forever" ? 1 : Math.max(1, Math.floor(Number(repeat) || 1));
+          for (let i = 0; i < count; i++) resolved.push(...source);
+        };
+
+        for (const token of sequence) {
+          if (typeof token !== "string" || !token) continue;
+
+          if (token.startsWith("pool:")) {
+            const pool = byPool.get(token.slice(5));
+            if (!pool) continue;
+            const assets = new Set(pool.assets ?? []);
+            const tracks = new Set(pool.tracks ?? []);
+            const matches = base.filter((entry) =>
+              (!assets.size || assets.has(entry.assetName)) &&
+              (!tracks.size || tracks.has(entry.track))
+            );
+            appendMatches(
+              matches,
+              pool.order === "random" ? "random" : "ordered",
+              pool.repeat ?? 1
+            );
+            continue;
+          }
+
+          if (token.startsWith("station:")) {
+            appendMatches(base.filter((entry) => entry.stationId === token.slice(8)));
+            continue;
+          }
+          if (token.startsWith("asset:")) {
+            appendMatches(base.filter((entry) => entry.assetName === token.slice(6)));
+            continue;
+          }
+          if (token.startsWith("track:")) {
+            appendMatches(base.filter((entry) => entry.track === token.slice(6)));
+            continue;
+          }
+
+          // Bare tokens are intentionally convenient: asset name first, then track.
+          const assetMatches = base.filter((entry) => entry.assetName === token);
+          appendMatches(
+            assetMatches.length
+              ? assetMatches
+              : base.filter((entry) => entry.track === token)
+          );
+        }
+
+        return resolved.length ? resolved : base;
       }
 
       function selectedFocusTrackUrl(obj: SceneObject) {
@@ -4179,6 +4257,11 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (!entry) return;
         if (entry.stationIndex !== arrivingAt) {
           requestStation(entry.stationIndex);
+          // Station changes load that station's saved settings. Playback intent
+          // belongs to the active journey, so immediately re-apply it.
+          presentationSettings.focusAudio.scope =
+            focusPlaybackProgram.scope === "station" ? "station" : "all";
+          presentationSettings.focusAudio.playbackMode = "zone-cycle";
         }
         const obj = (layouts[entry.stationIndex] ?? []).find(
           (candidate: SceneObject) =>
