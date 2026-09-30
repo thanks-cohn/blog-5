@@ -123,6 +123,23 @@ const runtimeConfig = {
 
     <div id="api-settings-controls" class="api-settings-controls"></div>
 
+    <section class="sphere-side-section" aria-labelledby="style-exploration-title">
+      <div class="sphere-side-title" id="style-exploration-title">Style exploration</div>
+      <label class="sphere-asset-add">
+        <span>Style mode</span>
+        <input id="style-exploration-toggle" type="checkbox" />
+      </label>
+      <div class="style-exploration-actions">
+        <button type="button" id="settings-save" class="settings-save">Save</button>
+        <button type="button" id="style-exploration-download" class="style-exploration-download" disabled>
+          Download JSON
+        </button>
+      </div>
+      <div id="style-exploration-status" class="sphere-size-readout">
+        Style mode is off.
+      </div>
+    </section>
+
     <section class="sphere-side-section" aria-labelledby="focus-song-pairing-title">
       <div class="sphere-side-title" id="focus-song-pairing-title">GLB focus song</div>
       <label class="sphere-asset-add">
@@ -393,6 +410,11 @@ const runtimeConfig = {
         getFocusPlaybackProgram(): FocusPlaybackProgram;
         setFocusPlaybackProgram(program: FocusPlaybackProgram): FocusPlaybackProgram;
         setFocusPlaybackOrder(order: FocusPlaybackOrder): FocusPlaybackProgram;
+        getStyleExplorationMode(): boolean;
+        setStyleExplorationMode(enabled: boolean): boolean;
+        saveSettings(): Record<string, unknown> | null;
+        getStyleSnapshot(): Record<string, unknown> | null;
+        downloadStyleSnapshot(): boolean;
         getSpatialEnvelope(name: string): SpatialEnvelopeConfig | null;
         setSpatialEnvelope(name: string, patch: Partial<SpatialEnvelopeConfig>): void;
         setEnvelopeDebug(name: string, visible: boolean): void;
@@ -417,6 +439,10 @@ const runtimeConfig = {
   const sphereSizeReadout = document.getElementById("sphere-size-readout");
   const stationSettingsTitle = document.getElementById("station-settings-title");
   const apiSettingsControls = document.getElementById("api-settings-controls");
+  const settingsSave = document.getElementById("settings-save") as HTMLButtonElement | null;
+  const styleExplorationToggle = document.getElementById("style-exploration-toggle") as HTMLInputElement | null;
+  const styleExplorationDownload = document.getElementById("style-exploration-download") as HTMLButtonElement | null;
+  const styleExplorationStatus = document.getElementById("style-exploration-status") as HTMLElement | null;
   const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
   const focusSongGlbPicker = document.getElementById("focus-song-glb-picker") as HTMLSelectElement | null;
   const focusSongStationPicker = document.getElementById("focus-song-station-picker") as HTMLSelectElement | null;
@@ -659,7 +685,110 @@ const runtimeConfig = {
     const assetMotionStorageKey = "webrev:asset-motion:v1";
     const assetFocusAudioStorageKey = "webrev:asset-focus-audio:v1";
     const spatialEnvelopeStorageKey = "webrev:spatial-envelope:v1";
+    const styleExplorationStorageKey = "webrev:style-exploration:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
+
+    function loadStyleExplorationMode() {
+      try {
+        const stored = window.localStorage.getItem(styleExplorationStorageKey);
+        if (stored === "true" || stored === "false") return stored === "true";
+      } catch {}
+      return false;
+    }
+
+    let styleExplorationEnabled = loadStyleExplorationMode();
+    let latestStyleSnapshot: Record<string, unknown> | null = null;
+    let styleSnapshotReady = false;
+
+    function updateStyleExplorationUi(message?: string) {
+      if (styleExplorationToggle) styleExplorationToggle.checked = styleExplorationEnabled;
+      if (styleExplorationDownload) {
+        const ready = styleExplorationEnabled && styleSnapshotReady && !!latestStyleSnapshot;
+        styleExplorationDownload.disabled = !ready;
+        styleExplorationDownload.classList.toggle("is-ready", ready);
+      }
+      if (styleExplorationStatus) {
+        styleExplorationStatus.textContent =
+          message ??
+          (!styleExplorationEnabled
+            ? "Style mode is off."
+            : styleSnapshotReady
+              ? "Saved style JSON is ready."
+              : "Style mode is on. Press Save to create JSON.");
+      }
+    }
+
+    function buildStyleSnapshot(reason = "settings-save") {
+      const positions: Record<string, any> = {};
+      if (typeof layouts !== "undefined") {
+        for (const layout of layouts) {
+          for (const obj of layout) {
+            if (!obj.url) continue;
+            positions[obj.name] = {
+              x: obj.local.x,
+              y: obj.local.y,
+              z: obj.local.z,
+              size: obj.size,
+              spin: obj.spin,
+              hemisphere: obj.hemisphere ?? "front",
+              visible: obj.visible !== false
+            };
+          }
+        }
+      }
+
+      return {
+        schemaVersion: 1,
+        kind: "webrev-style-snapshot",
+        capturedAt: new Date().toISOString(),
+        reason,
+        presentation: config?.title ?? "presentation",
+        assetStations: JSON.parse(JSON.stringify(assetStationState ?? {})),
+        assetFocusAudio: JSON.parse(JSON.stringify(assetFocusAudioState ?? {})),
+        assetPlacement: JSON.parse(JSON.stringify(assetPlacement ?? {})),
+        assetMotion: JSON.parse(JSON.stringify(assetMotionState ?? {})),
+        spatialEnvelope: JSON.parse(JSON.stringify(spatialEnvelopeState ?? {})),
+        stationSettings: JSON.parse(JSON.stringify(stationSettings ?? {})),
+        focusPlaybackProgram: JSON.parse(JSON.stringify(focusPlaybackProgram ?? {})),
+        positions
+      };
+    }
+
+    function saveCurrentSettingsSnapshot() {
+      saveStationSettings();
+      if (!styleExplorationEnabled) {
+        latestStyleSnapshot = null;
+        styleSnapshotReady = false;
+        updateStyleExplorationUi("Settings saved. Style mode is off, so no JSON was created.");
+        return null;
+      }
+
+      latestStyleSnapshot = buildStyleSnapshot("settings-save");
+      styleSnapshotReady = true;
+      updateStyleExplorationUi("Settings saved. JSON is ready to download.");
+      window.dispatchEvent(new CustomEvent("webrev:style-snapshot-ready", {
+        detail: latestStyleSnapshot
+      }));
+      return latestStyleSnapshot;
+    }
+
+    function downloadCurrentStyleSnapshot() {
+      if (!styleExplorationEnabled || !styleSnapshotReady || !latestStyleSnapshot) return false;
+      const capturedAt = String((latestStyleSnapshot as any).capturedAt ?? new Date().toISOString());
+      const safeStamp = capturedAt.replace(/[:.]/g, "-");
+      const blob = new Blob([JSON.stringify(latestStyleSnapshot, null, 2)], {
+        type: "application/json"
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `webrev-style-${safeStamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      return true;
+    }
     for (const station of stationDefinitions) {
       const assets = Array.isArray(config.assetsByArtwork?.[station.artworkName])
         ? config.assetsByArtwork[station.artworkName]
@@ -1884,6 +2013,35 @@ const runtimeConfig = {
         }));
         return JSON.parse(JSON.stringify(focusPlaybackProgram));
       },
+      getStyleExplorationMode() {
+        return styleExplorationEnabled;
+      },
+      setStyleExplorationMode(enabled: boolean) {
+        styleExplorationEnabled = Boolean(enabled);
+        try {
+          window.localStorage.setItem(styleExplorationStorageKey, String(styleExplorationEnabled));
+        } catch {}
+        if (!styleExplorationEnabled) {
+          latestStyleSnapshot = null;
+          styleSnapshotReady = false;
+        }
+        updateStyleExplorationUi();
+        window.dispatchEvent(new CustomEvent("webrev:style-exploration-mode", {
+          detail: { enabled: styleExplorationEnabled }
+        }));
+        return styleExplorationEnabled;
+      },
+      saveSettings() {
+        return saveCurrentSettingsSnapshot();
+      },
+      getStyleSnapshot() {
+        return latestStyleSnapshot
+          ? JSON.parse(JSON.stringify(latestStyleSnapshot))
+          : null;
+      },
+      downloadStyleSnapshot() {
+        return downloadCurrentStyleSnapshot();
+      },
       getSpatialEnvelope(name: string) {
         if (!allSceneAssetNames().some((asset) => asset.name === name)) return null;
         return {
@@ -2452,6 +2610,7 @@ const runtimeConfig = {
 
         renderApiSettingsControls();
         renderFocusSongPairing();
+        updateStyleExplorationUi();
 
         frontAssetsList.replaceChildren();
         backAssetsList.replaceChildren();
@@ -2483,6 +2642,18 @@ const runtimeConfig = {
         }
         assetPicker.disabled = hidden.length === 0;
       }
+
+      styleExplorationToggle?.addEventListener("change", () => {
+        window.webrevPresentationSettings?.setStyleExplorationMode(
+          styleExplorationToggle.checked
+        );
+      });
+      settingsSave?.addEventListener("click", () => {
+        window.webrevPresentationSettings?.saveSettings();
+      });
+      styleExplorationDownload?.addEventListener("click", () => {
+        window.webrevPresentationSettings?.downloadStyleSnapshot();
+      });
 
       settingsToggle?.addEventListener("click", () => {
         if (!settingsPanel) return;
@@ -4959,6 +5130,35 @@ const runtimeConfig = {
 
   .rail-ride-next[hidden] {
     display:none;
+  }
+
+  .style-exploration-actions {
+    display:flex;
+    gap:8px;
+    align-items:center;
+  }
+
+  .settings-save,
+  .style-exploration-download {
+    flex:1;
+    min-height:36px;
+    border:1px solid rgba(255,255,255,.18);
+    border-radius:8px;
+    background:rgba(255,255,255,.07);
+    color:inherit;
+    cursor:pointer;
+    font:inherit;
+  }
+
+  .style-exploration-download:disabled {
+    opacity:.38;
+    cursor:not-allowed;
+  }
+
+  .style-exploration-download.is-ready {
+    background:rgba(36,170,88,.22);
+    border-color:rgba(82,220,132,.72);
+    box-shadow:0 0 0 1px rgba(82,220,132,.12) inset;
   }
 
   .focus-song-overlay {
