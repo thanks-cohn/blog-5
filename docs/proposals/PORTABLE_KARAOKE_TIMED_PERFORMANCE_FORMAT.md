@@ -294,6 +294,25 @@ It may simply be:
 
 The timed-performance file supplies the karaoke independently.
 
+## Near-Term vs Future Presentation Scope
+
+The immediate implementation priority remains the independent music and orchestration system.
+
+The embedded-video floor should be treated as a later presentation layer, not a prerequisite for the first music journey work.
+
+The intended progression is:
+
+```text
+independent music engine
+-> journey orchestration
+-> portable timed-performance format
+-> media-backed presentation surfaces
+-> embedded video floor
+-> richer camera-aware spatial performances
+```
+
+This preserves a clean foundation and prevents the visual layer from becoming coupled to basic playback logic.
+
 ## Embedded Video Floor
 
 For YouTube-backed performances, blog-5 should be able to place the embedded video visually as the floor plane beneath the focal object.
@@ -314,6 +333,73 @@ Conceptually:
 The implementation should preserve the media player's actual playback semantics while visually integrating the player into the spatial composition.
 
 The player remains the timing authority.
+
+
+## Camera-Aware Video Floor
+
+The floor video should belong to the focal object's presentation rig.
+
+It should not behave like an unfinished static rectangle left behind in world space when the camera moves.
+
+At the same time, it should not become a flat screen-locked HUD element.
+
+The goal is a spatial surface that remains convincingly underneath the object while dynamically maintaining a strong relationship to the active camera.
+
+Conceptually:
+
+```text
+Object Presentation Rig
+├─ focal object
+├─ rear karaoke surface
+├─ floor video surface
+└─ camera-relative presentation rules
+```
+
+When the camera travels, rotates, approaches, or leaves the object, the floor may adapt its orientation, perspective, apparent size, distance, tilt, visibility, and framing while continuing to read as a spatial floor beneath the object.
+
+The desired behavior is:
+
+```text
+camera travels
+      |
+      v
+presentation rig adapts
+      |
+      v
+video remains a deliberate visible floor
+```
+
+rather than:
+
+```text
+camera travels
+      |
+      v
+video becomes a tiny, unreadable, accidental trapezoid
+```
+
+Possible future configuration:
+
+```ts
+floorPresentation: {
+  followCamera: true,
+  keepUnderObject: true,
+  maintainReadability: true,
+  minScreenCoverage: 0.22,
+  maxTilt: 68
+}
+```
+
+These values are illustrative. The underlying principle matters more than the exact API.
+
+### Living-Screen Aesthetic
+
+A long-term visual inspiration is the feeling of a world populated by active screens and media surfaces: many displays producing synchronized visual material as part of the environment rather than appearing as ordinary UI panels.
+
+The intended aesthetic is a dense animated-media environment in which screens are embedded into the world, media continues while the camera moves, and video surfaces become part of the scene's identity.
+
+As the camera travels between objects, glimpses of active floor videos should make the world feel inhabited by simultaneous performances rather than expose unfinished geometry or inactive presentation surfaces.
+
 
 ## Separation of Responsibilities
 
