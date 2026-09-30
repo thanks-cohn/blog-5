@@ -5163,7 +5163,15 @@ const runtimeConfig = {
         const wasClick = draggedDistance < 6;
         grabbed = null;
         if (gameCanvas.hasPointerCapture(event.pointerId)) gameCanvas.releasePointerCapture(event.pointerId);
-        if (wasClick && obj.kind !== "3d") executeAction(obj.action);
+        if (wasClick && obj.kind === "3d" && obj.visible !== false) {
+          const track = focusTrackForObject(obj);
+          requestFocusExperience(
+            obj,
+            track ? { url: track.url, track: track.name } : undefined
+          );
+        } else if (wasClick && obj.kind !== "3d") {
+          executeAction(obj.action);
+        }
       }
 
       gameCanvas.addEventListener("pointerup", releasePointer);
@@ -5194,7 +5202,16 @@ const runtimeConfig = {
         const hit = findHitObject(x, y);
         if (hit) {
           if (hit.kind === "3d" && hit.visible !== false) {
-            requestFocusExperience(hit);
+            const track = focusTrackForObject(hit);
+            requestFocusExperience(
+              hit,
+              track ? { url: track.url, track: track.name } : undefined
+            );
+            status && (status.textContent =
+              track
+                ? `Playing ${track.name.replace(/\.[^.]+$/, "")} · ${hit.name}`
+                : `Come Into Our World · ${hit.name}`
+            );
           }
           return;
         }
