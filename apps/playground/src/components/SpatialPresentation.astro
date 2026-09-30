@@ -4428,35 +4428,45 @@ const runtimeConfig = {
 
         const catalog = trackCatalog();
         if (!catalog.length) return null;
-        const recent = recentPlayedTrackNames();
+
         const assigned =
           assetFocusAudioState[obj.name]?.track ??
           configuredAssetFocusTrack(obj.name);
 
-        // Explicit pairings remain the first preference unless history vetoes them.
-        if (assigned && !recent.has(assigned)) {
-          const paired = catalog.find(
+        // A real pairing is authoritative. Recent-history avoidance is only
+        // for fallback selection on GLBs that do not have a fixed song.
+        if (assigned) {
+          return catalog.find(
             (track: { name: string; url: string }) => track.name === assigned
-          );
-          if (paired) return paired;
+          ) ?? null;
         }
 
-        // Unpaired songs are the preferred substitute. This also handles a paired
-        // GLB whose paired track is temporarily excluded by the history policy.
-        const unassignedEligible = historyEligibleTracks(unassignedTracks());
-        if (unassignedEligible.length) {
-          const planeObjects = visiblePlaneGlbs(arrivingAt);
-          const objectIndex = Math.max(
-            0,
-            planeObjects.findIndex((candidate: SceneObject) => candidate.name === obj.name)
-          );
-          return unassignedEligible[objectIndex % unassignedEligible.length] ?? null;
-        }
+        // Unpaired GLBs choose only from globally unassigned songs.
+        // First remove anything heard within the configured recent-history window.
+        const fallbackPool = unassignedTracks();
+        if (!fallbackPool.length) return null;
 
-        // If every unassigned song is unavailable/missing, use any history-eligible
-        // catalog track. historyEligibleTracks gracefully relaxes when N blocks all.
-        const eligibleCatalog = historyEligibleTracks(catalog);
-        return eligibleCatalog[0] ?? null;
+        const recent = recentPlayedTrackNames();
+        const eligible = fallbackPool.filter(
+          (track: { name: string; url: string }) => !recent.has(track.name)
+        );
+        const candidates = eligible.length ? eligible : fallbackPool;
+
+        const planeObjects = visiblePlaneGlbs(arrivingAt);
+        const unpairedObjects = planeObjects.filter((candidate: SceneObject) => {
+          const candidateAssigned =
+            assetFocusAudioState[candidate.name]?.track ??
+            configuredAssetFocusTrack(candidate.name);
+          return !candidateAssigned;
+        });
+        const objectIndex = Math.max(
+          0,
+          unpairedObjects.findIndex(
+            (candidate: SceneObject) => candidate.name === obj.name
+          )
+        );
+
+        return candidates[objectIndex % candidates.length] ?? candidates[0] ?? null;
       }
 
       function planeJourneyEntries(stationIndex: number) {
@@ -4495,15 +4505,17 @@ const runtimeConfig = {
         );
         if (!obj) return;
 
-        const catalog = trackCatalog();
-        const recent = recentPlayedTrackNames();
-        let chosen = catalog.find(
-          (track: { name: string; url: string }) => track.name === entry.track
-        ) ?? null;
+        const assigned =
+          assetFocusAudioState[obj.name]?.track ??
+          configuredAssetFocusTrack(obj.name);
 
-        if (!chosen || recent.has(chosen.name)) {
-          chosen = focusTrackForObject(obj);
-        }
+        // Paired objects keep their fixed song. Unpaired objects resolve a
+        // history-aware fallback from the unassigned-song pool.
+        const chosen = assigned
+          ? trackCatalog().find(
+              (track: { name: string; url: string }) => track.name === assigned
+            ) ?? null
+          : focusTrackForObject(obj);
 
         requestFocusExperience(
           obj,
