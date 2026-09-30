@@ -31,6 +31,7 @@ describe("focusJourney", () => {
         enabled: true,
         tracks: ["one.mp3", "two.mp3", "three.mp3"],
         strategy: "random",
+        sequence: [],
         avoidImmediateRepeat: true,
         between: "stations",
         playToEnd: true
@@ -71,6 +72,7 @@ describe("focusJourney", () => {
         enabled: true,
         tracks: ["intermission.mp3"],
         strategy: "random",
+        sequence: [],
         avoidImmediateRepeat: true,
         between: "stations",
         playToEnd: true
