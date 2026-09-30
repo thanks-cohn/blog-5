@@ -212,6 +212,19 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
   type CameraMode = "locked" | "focus" | "free";
   type FocusPlaybackMode = "zone-cycle" | "loop-item";
   type FocusPlaybackScope = "station" | "all";
+  type FocusPlaybackOrder = "ordered" | "random";
+  type FocusPlaybackProgram = {
+    scope?: FocusPlaybackScope;
+    order?: FocusPlaybackOrder;
+    sequence?: string[];
+    pools?: Array<{
+      id: string;
+      assets?: string[];
+      tracks?: string[];
+      order?: FocusPlaybackOrder;
+      repeat?: number | "forever";
+    }>;
+  };
   type FocusPlaylistEntry = {
     stationId: string;
     stationIndex: number;
@@ -344,6 +357,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         getFocusPlaylist(): FocusPlaylistEntry[];
         setFocusPlaybackMode(mode: FocusPlaybackMode): PresentationSettingsSnapshot;
         setFocusPlaybackScope(scope: FocusPlaybackScope): PresentationSettingsSnapshot;
+        getFocusPlaybackProgram(): FocusPlaybackProgram;
+        setFocusPlaybackProgram(program: FocusPlaybackProgram): FocusPlaybackProgram;
+        setFocusPlaybackOrder(order: FocusPlaybackOrder): FocusPlaybackProgram;
         getSpatialEnvelope(name: string): SpatialEnvelopeConfig | null;
         setSpatialEnvelope(name: string, patch: Partial<SpatialEnvelopeConfig>): void;
         setEnvelopeDebug(name: string, visible: boolean): void;
@@ -392,6 +408,12 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
   const envelopeDebugGlobes = new Map<string, any>();
   const imagePlanes = new Map<string, { group: any; mesh: any; texture: any; signature: string }>();
   const textPlanes = new Map<string, { mesh: any; texture: any; signature: string }>();
+  let focusPlaybackProgram: FocusPlaybackProgram = {
+    scope: "all",
+    order: "ordered",
+    sequence: [],
+    pools: []
+  };
 
   function ensureThree() {
     if (threeRenderer || !(glbCanvas instanceof HTMLCanvasElement)) return;
@@ -1724,6 +1746,50 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       setFocusPlaybackScope(scope: FocusPlaybackScope) {
         presentationSettings.focusAudio.scope = scope === "all" ? "all" : "station";
         return publishSettings();
+      },
+      getFocusPlaybackProgram() {
+        return JSON.parse(JSON.stringify(focusPlaybackProgram));
+      },
+      setFocusPlaybackProgram(program: FocusPlaybackProgram) {
+        const next: FocusPlaybackProgram = {
+          scope: program?.scope === "station" ? "station" : "all",
+          order: program?.order === "random" ? "random" : "ordered",
+          sequence: Array.isArray(program?.sequence)
+            ? program.sequence.filter((value) => typeof value === "string")
+            : [],
+          pools: Array.isArray(program?.pools)
+            ? program.pools.map((pool) => ({
+                id: String(pool?.id ?? ""),
+                assets: Array.isArray(pool?.assets)
+                  ? pool.assets.filter((value) => typeof value === "string")
+                  : [],
+                tracks: Array.isArray(pool?.tracks)
+                  ? pool.tracks.filter((value) => typeof value === "string")
+                  : [],
+                order: pool?.order === "random" ? "random" : "ordered",
+                repeat:
+                  pool?.repeat === "forever"
+                    ? "forever"
+                    : Math.max(1, Math.floor(Number(pool?.repeat) || 1))
+              }))
+            : []
+        };
+        focusPlaybackProgram = next;
+        presentationSettings.focusAudio.scope = next.scope === "station" ? "station" : "all";
+        window.dispatchEvent(new CustomEvent("webrev:focus-playback-program", {
+          detail: JSON.parse(JSON.stringify(next))
+        }));
+        return JSON.parse(JSON.stringify(next));
+      },
+      setFocusPlaybackOrder(order: FocusPlaybackOrder) {
+        focusPlaybackProgram = {
+          ...focusPlaybackProgram,
+          order: order === "random" ? "random" : "ordered"
+        };
+        window.dispatchEvent(new CustomEvent("webrev:focus-playback-program", {
+          detail: JSON.parse(JSON.stringify(focusPlaybackProgram))
+        }));
+        return JSON.parse(JSON.stringify(focusPlaybackProgram));
       },
       getSpatialEnvelope(name: string) {
         if (!allSceneAssetNames().some((asset) => asset.name === name)) return null;
@@ -3733,18 +3799,26 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (index < 0) {
           index = playlist.findIndex((entry) => entry.assetName === focusExperience?.object.name);
         }
-        const next = playlist[(index + 1 + playlist.length) % playlist.length];
+
+        let next: FocusPlaylistEntry | undefined;
+        if (focusPlaybackProgram.order === "random" && playlist.length > 1) {
+          let nextIndex = Math.floor(Math.random() * playlist.length);
+          if (nextIndex === index) nextIndex = (nextIndex + 1) % playlist.length;
+          next = playlist[nextIndex];
+        } else {
+          next = playlist[(index + 1 + playlist.length) % playlist.length];
+        }
         if (!next) return;
 
-        playFocusAudioSource(
-          next.url,
-          next.assetName,
-          Math.max(0, Math.min(1, presentationSettings.focusAudio.volume))
-        );
+        // A playlist step is a complete visual+audio handoff. Crossing the end
+        // of one plane naturally travels to the next; the final plane wraps
+        // back to plane one because the playlist itself is circular.
+        focusPlaylistEntry(next);
         window.dispatchEvent(new CustomEvent("webrev:focus-playlist-track", {
           detail: {
             mode: presentationSettings.focusAudio.playbackMode,
             scope: presentationSettings.focusAudio.scope,
+            order: focusPlaybackProgram.order ?? "ordered",
             stationId: next.stationId,
             stationIndex: next.stationIndex,
             assetName: next.assetName,
@@ -4137,34 +4211,103 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         focusPlaylistEntry(playlist[nextIndex]);
       }
 
+      function randomizeFocusPlaylist() {
+        const api = window.webrevPresentationSettings;
+        api?.setFocusPlaybackOrder(
+          focusPlaybackProgram.order === "random" ? "ordered" : "random"
+        );
+      }
+
+      function addContextSongPicker() {
+        if (!editContextMenu) return;
+        const previousScope = presentationSettings.focusAudio.scope;
+        presentationSettings.focusAudio.scope = "all";
+        const playlist = resolvedFocusPlaylist();
+        presentationSettings.focusAudio.scope = previousScope;
+        if (!playlist.length) return;
+
+        const wrap = document.createElement("label");
+        wrap.className = "edit-context-song-picker";
+
+        const label = document.createElement("span");
+        label.textContent = "Jump to song";
+
+        const select = document.createElement("select");
+        select.setAttribute("aria-label", "Jump to song");
+
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Choose a song…";
+        select.appendChild(placeholder);
+
+        playlist.forEach((entry, index) => {
+          const option = document.createElement("option");
+          option.value = String(index);
+          const stationLabel = stations[entry.stationIndex]?.label ?? entry.stationId;
+          option.textContent = `${entry.track.replace(/\.[^.]+$/, "")} · ${stationLabel}`;
+          select.appendChild(option);
+        });
+
+        select.addEventListener("change", () => {
+          const index = Number(select.value);
+          if (!Number.isInteger(index) || index < 0 || index >= playlist.length) return;
+          focusPlaylistEntry(playlist[index]);
+          closeEditContextMenu();
+        });
+
+        wrap.append(label, select);
+        editContextMenu.appendChild(wrap);
+      }
+
       function openExperienceContextMenu(clientX: number, clientY: number, obj: SceneObject | null) {
         if (!editContextMenu) return;
         editContextMenu.replaceChildren();
 
-        if (focusExperience && focusExperience.stationIndex === arrivingAt) {
-          const api = window.webrevPresentationSettings;
-          addEditContextAction(
-            "Play all songs",
-            () => api?.setFocusPlaybackMode("zone-cycle"),
+        const api = window.webrevPresentationSettings;
+        const heading = document.createElement("div");
+        heading.className = "edit-context-heading";
+        heading.textContent = "Music";
+        editContextMenu.appendChild(heading);
+
+        addContextSongPicker();
+        addEditContextAction("Previous Song", () => stepFocusPlaylist(-1));
+        addEditContextAction("Next Song", () => stepFocusPlaylist(1));
+        addEditContextAction(
+          "Loop Plane",
+          () => {
+            api?.setFocusPlaybackScope("station");
+            api?.setFocusPlaybackMode("zone-cycle");
+            focusPlaybackProgram = { ...focusPlaybackProgram, scope: "station" };
+          },
+          presentationSettings.focusAudio.scope === "station" &&
             presentationSettings.focusAudio.playbackMode === "zone-cycle"
-          );
-          addEditContextAction(
-            "Loop this song",
-            () => api?.setFocusPlaybackMode("loop-item"),
-            presentationSettings.focusAudio.playbackMode === "loop-item"
-          );
-          addEditContextAction("Leave for now <3", () => endFocusExperience());
-        } else if (!obj || obj.kind !== "3d") {
-          const heading = document.createElement("div");
-          heading.className = "edit-context-heading";
-          heading.textContent = "Come Into Our World";
-          editContextMenu.appendChild(heading);
-        } else {
-          addEditContextAction("Come Into Our World", () => requestFocusExperience(obj));
+        );
+        addEditContextAction(
+          "Loop All",
+          () => {
+            api?.setFocusPlaybackScope("all");
+            api?.setFocusPlaybackMode("zone-cycle");
+            focusPlaybackProgram = { ...focusPlaybackProgram, scope: "all" };
+          },
+          presentationSettings.focusAudio.scope === "all" &&
+            presentationSettings.focusAudio.playbackMode === "zone-cycle"
+        );
+        addEditContextAction(
+          focusPlaybackProgram.order === "random" ? "Randomize ✓" : "Randomize",
+          () => randomizeFocusPlaylist(),
+          focusPlaybackProgram.order === "random"
+        );
+
+        if (obj?.kind === "3d") {
+          const objectHeading = document.createElement("div");
+          objectHeading.className = "edit-context-heading";
+          objectHeading.textContent = obj.name;
+          editContextMenu.appendChild(objectHeading);
+          addEditContextAction("Play This", () => requestFocusExperience(obj));
         }
 
-        editContextMenu.style.left = `${Math.max(8, Math.min(window.innerWidth - 270, clientX))}px`;
-        editContextMenu.style.top = `${Math.max(8, Math.min(window.innerHeight - 180, clientY))}px`;
+        editContextMenu.style.left = `${Math.max(8, Math.min(window.innerWidth - 290, clientX))}px`;
+        editContextMenu.style.top = `${Math.max(8, Math.min(window.innerHeight - 360, clientY))}px`;
         editContextMenu.hidden = false;
       }
 
@@ -4404,6 +4547,14 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         if (event.key === "Home") requestStation(0);
       });
 
+      // v2 demo default: ordered songs across every plane, wrapping forever.
+      presentationSettings.focusAudio.scope = "all";
+      presentationSettings.focusAudio.playbackMode = "zone-cycle";
+      focusPlaybackProgram = {
+        ...focusPlaybackProgram,
+        scope: "all",
+        order: "ordered"
+      };
       requestStation(0);
       requestAnimationFrame(render);
     }
@@ -4454,7 +4605,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     color:rgba(255,255,255,.72);
     cursor:pointer;
     touch-action:manipulation;
-    display:flex;
+    display:none;
     align-items:center;
     opacity:.58;
     transition:opacity 160ms ease, background 160ms ease;
@@ -4491,8 +4642,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     opacity:1;
   }
 
-  @media (max-width: 640px) {
+  @media (max-width: 640px) and (pointer: coarse) {
     .focus-song-overlay {
+      display:flex;
       top:22%;
       bottom:22%;
       width:64px;
@@ -4502,6 +4654,30 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     .focus-song-overlay span {
       font-size:52px;
     }
+  }
+
+    .edit-context-song-picker {
+    display:grid;
+    gap:6px;
+    padding:8px 10px 10px;
+    color:rgba(255,255,255,.58);
+    font:700 10px/1.2 ui-sans-serif,system-ui;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+  }
+
+  .edit-context-song-picker select {
+    width:100%;
+    min-height:38px;
+    box-sizing:border-box;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:8px;
+    background:#15191f;
+    color:#fff;
+    padding:0 9px;
+    font:12px ui-sans-serif,system-ui;
+    letter-spacing:normal;
+    text-transform:none;
   }
 
     .sphere-settings-toggle {
