@@ -220,6 +220,188 @@ skip-unpaired
 
 For blog-5 v2, the default is `continue-journey`.
 
+
+## Overflow Is Also an Authored Control-Flow Choice
+
+Overflow must not exist only as an automatic fallback for unpaired songs.
+
+The orchestration language should also let an author deliberately enter, leave, repeat, or terminate an Overflow segment.
+
+At the simple UX level, the user may choose what happens when a playlist or journey reaches its boundary:
+
+```text
+After this playlist / journey:
+
+- Restart
+- Overflow
+- Stop
+```
+
+The default remains `Restart`.
+
+The advanced API, however, should allow these behaviors to appear anywhere in a journey rather than only at the end.
+
+For example:
+
+```text
+PLAY 4 SONGS IN OVERFLOW
+-> RESTART THE ENTIRE JOURNEY
+-> PLAY 4 SONGS INTO THE REPLAY
+-> STOP
+-> ENTER OVERFLOW AGAIN
+```
+
+Or:
+
+```text
+PLAYLIST A
+-> OVERFLOW next 4 tracks
+-> RESTART Journey
+-> advance 4 tracks
+-> STOP
+```
+
+Or:
+
+```text
+PLAYLIST A
+-> PLAYLIST B
+-> OVERFLOW until paired track
+-> RESTART from checkpoint "chapter-one"
+-> repeat section twice
+-> STOP
+```
+
+The point is not to expose all of these controls in the default interface.
+
+The point is that the underlying engine should be capable of expressing them cleanly.
+
+## Journey Control Primitives
+
+Rather than accumulating one-off booleans, the API should be built from a small set of composable control primitives.
+
+Illustrative primitives:
+
+```ts
+type JourneyNode =
+  | TrackNode
+  | PlaylistNode
+  | PoolNode
+  | PlaneNode
+  | OverflowNode
+  | RestartNode
+  | StopNode
+  | RepeatNode
+  | CheckpointNode
+  | GotoNode;
+```
+
+Possible forms:
+
+```ts
+type OverflowNode = {
+  type: "overflow";
+  count?: number;
+  until?: "paired-track" | "playlist-end" | "journey-end";
+};
+
+type RestartNode = {
+  type: "restart";
+  target?: "journey" | "playlist" | { checkpoint: string };
+};
+
+type StopNode = {
+  type: "stop";
+  after?: number;
+};
+
+type RepeatNode = {
+  type: "repeat";
+  target: { playlistId?: string; checkpoint?: string };
+  count: number | "forever";
+};
+
+type CheckpointNode = {
+  type: "checkpoint";
+  id: string;
+};
+
+type GotoNode = {
+  type: "goto";
+  checkpoint: string;
+};
+```
+
+These examples are illustrative rather than a final schema. The design requirement is more important than the exact syntax:
+
+**Complex behavior should emerge from composing a few clear primitives, not from adding an ever-growing list of special cases.**
+
+## First-Principles Orchestration Design
+
+This API should aim to be one of the places where deeply sophisticated media orchestration is possible without becoming obscure, brittle, or needlessly convoluted.
+
+The governing principles are:
+
+1. **Composition over special cases.** Build complex journeys from a small number of understandable primitives.
+2. **State must be explicit.** Current track, playlist, plane, overflow state, repeat count, checkpoint, and pending transition should be inspectable.
+3. **Deterministic by default.** Random behavior must be explicitly requested and, where useful, seedable.
+4. **Pairings are metadata, not control flow.** Visual/song pairings remain intact regardless of how a journey temporarily routes around them.
+5. **Boundaries are explicit.** Restart, overflow, continue, stop, repeat, and jump behavior should never be accidental side effects.
+6. **The simple path stays simple.** Ordinary users should be able to use the system without seeing the advanced model.
+7. **The advanced path stays coherent.** Experts and agents should gain power by combining the same primitives rather than learning unrelated modes.
+8. **Programs should be serializable.** A journey should be representable as portable JSON-like data that can be saved, shared, inspected, generated, transformed, and migrated.
+9. **Programs should be introspectable.** The runtime should be able to explain what it is doing now and what it intends to do next.
+10. **Programs should be extensible.** Future creators should be able to add richer transitions, conditions, media types, and spatial behaviors without invalidating the foundation.
+
+This is intentionally a foundation rather than a fixed feature list.
+
+The goal is to provide an elegant orchestration substrate upon which future developers, creators, and agents can build increasingly sophisticated experiences while preserving the same mental model.
+
+## The UX as a Progressive Disclosure Layer
+
+The user interface should reveal complexity only when requested.
+
+A casual user may only see:
+
+```text
+Play
+Next
+Previous
+Loop Plane
+Loop All
+Randomize
+Create Your Own
+```
+
+A creator opening `Create Your Own` may see:
+
+```text
+Playlists
+Journey order
+Restart / Overflow / Stop
+Ordered / Random
+Repeat
+```
+
+An advanced editor may reveal:
+
+```text
+checkpoints
+nested playlists
+overflow counts
+conditional transitions
+random pools
+repeat scopes
+jump targets
+plane transitions
+custom visual behavior
+```
+
+And an agent can work directly against the complete orchestration representation.
+
+All of these are different faces over the same engine.
+
+
 ## Orchestration API
 
 The engine should support programs substantially more expressive than the initial UX.
@@ -254,6 +436,26 @@ type JourneyNode =
   | {
       type: "plane";
       planeId: string;
+    }
+  | {
+      type: "overflow";
+      count?: number;
+      until?: "paired-track" | "playlist-end" | "journey-end";
+    }
+  | {
+      type: "restart";
+      target?: "journey" | "playlist" | { checkpoint: string };
+    }
+  | {
+      type: "stop";
+    }
+  | {
+      type: "checkpoint";
+      id: string;
+    }
+  | {
+      type: "goto";
+      checkpoint: string;
     };
 
 type PlaylistDefinition = {
@@ -450,6 +652,8 @@ The playback engine resolves these pairings at runtime.
 blog-5 v2 should demonstrate a paradox intentionally:
 
 **The experience should feel tiny. The architecture should feel enormous.**
+
+The deeper ambition is not complexity for its own sake. It is to make sophisticated orchestration unusually **easy, intuitive, inspectable, and composable**. The system should prefer elegant primitives and good defaults over sprawling configuration.
 
 A casual visitor should understand the controls immediately.
 
