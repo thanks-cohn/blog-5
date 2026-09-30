@@ -1,3 +1,4 @@
+# deployment retry: 2026-09-30 after Pages source change
 # deployment trigger: 2026-09-30 blog-5 v2
 name: Deploy GitHub Pages
 
