@@ -4381,6 +4381,10 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           focusPlaybackProgram.order === "random"
         );
 
+        if (focusExperience && focusExperience.stationIndex === arrivingAt) {
+          addEditContextAction("Leave for now <3", () => endFocusExperience());
+        }
+
         if (obj?.kind === "3d") {
           const objectHeading = document.createElement("div");
           objectHeading.className = "edit-context-heading";
