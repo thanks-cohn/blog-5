@@ -2662,9 +2662,23 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
 
       function generateLayout(station: any, index: number): SceneObject[] {
         const rand = rngFor(station, index);
-        const discovered = Array.isArray(assetsByArtwork[station.artworkName])
+        const allDiscovered = Array.isArray(assetsByArtwork[station.artworkName])
           ? assetsByArtwork[station.artworkName]
           : [];
+        const displayMainImageAsFloatingObject =
+          station?.mainImage?.displayAsFloatingObject ??
+          arrangement?.mainImage?.displayAsFloatingObject ??
+          false;
+        const mainImageFile = String(
+          station?.centerImage ??
+          `${station.artworkName}-center`
+        ).replace(/^.*\//, "");
+        const mainImageBase = mainImageFile.replace(/\.[^.]+$/, "");
+        const discovered = allDiscovered.filter((asset: any) => {
+          if (displayMainImageAsFloatingObject) return true;
+          const assetBase = String(asset?.name ?? "").replace(/\.[^.]+$/, "");
+          return assetBase !== mainImageBase && assetBase !== `${station.artworkName}-center`;
+        });
         const requestedDisplayMode = station.assetDisplayMode ?? arrangement.assetDisplayMode;
         const displayMode = requestedDisplayMode === "assets-and-proxies"
           ? "assets-and-proxies"
