@@ -137,7 +137,7 @@
         "mode": "click",
         "delayMs": 0
       },
-      "assetDisplayMode": "assets-and-proxies",
+      "assetDisplayMode": "assets-only",
       "asset3d": {
         "layer": "middle",
         "hideBehindImage": true
