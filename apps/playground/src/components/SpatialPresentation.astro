@@ -129,6 +129,10 @@ const runtimeConfig = {
         <span>Style mode</span>
         <input id="style-exploration-toggle" type="checkbox" />
       </label>
+      <label class="sphere-asset-add">
+        <span>Start journey on click</span>
+        <input id="journey-click-start-toggle" type="checkbox" checked />
+      </label>
       <div class="style-exploration-actions">
         <button type="button" id="settings-save" class="settings-save">Save</button>
         <button type="button" id="style-exploration-download" class="style-exploration-download" disabled>
@@ -414,6 +418,8 @@ const runtimeConfig = {
         setFocusPlaybackOrder(order: FocusPlaybackOrder): FocusPlaybackProgram;
         getStyleExplorationMode(): boolean;
         setStyleExplorationMode(enabled: boolean): boolean;
+        getJourneyClickStart(): boolean;
+        setJourneyClickStart(enabled: boolean): boolean;
         saveSettings(): Record<string, unknown> | null;
         getStyleSnapshot(): Record<string, unknown> | null;
         downloadStyleSnapshot(): boolean;
@@ -443,6 +449,7 @@ const runtimeConfig = {
   const apiSettingsControls = document.getElementById("api-settings-controls");
   const settingsSave = document.getElementById("settings-save") as HTMLButtonElement | null;
   const styleExplorationToggle = document.getElementById("style-exploration-toggle") as HTMLInputElement | null;
+  const journeyClickStartToggle = document.getElementById("journey-click-start-toggle") as HTMLInputElement | null;
   const styleExplorationDownload = document.getElementById("style-exploration-download") as HTMLButtonElement | null;
   const styleExplorationStatus = document.getElementById("style-exploration-status") as HTMLElement | null;
   const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
@@ -688,6 +695,7 @@ const runtimeConfig = {
     const assetFocusAudioStorageKey = "webrev:asset-focus-audio:v1";
     const spatialEnvelopeStorageKey = "webrev:spatial-envelope:v1";
     const styleExplorationStorageKey = "webrev:style-exploration:v1";
+    const journeyClickStartStorageKey = "webrev:journey-click-start:v1";
     const unpairedGlbLimitStorageKey = "webrev:unpaired-glb-limit:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
 
@@ -702,7 +710,7 @@ const runtimeConfig = {
       };
     }
 
-    let unpairedGlbLimits = loadUnpairedGlbLimits();
+    let unpairedGlbLimits: Record<string, number> = loadUnpairedGlbLimits();
 
     function resolvedUnpairedGlbLimit(stationId?: string) {
       const specific = stationId ? Number(unpairedGlbLimits[stationId]) : NaN;
@@ -731,6 +739,20 @@ const runtimeConfig = {
     }
 
     let styleExplorationEnabled = loadStyleExplorationMode();
+
+    function loadJourneyClickStart() {
+      try {
+        const stored = window.localStorage.getItem(journeyClickStartStorageKey);
+        if (stored === "true" || stored === "false") return stored === "true";
+      } catch {}
+      return true;
+    }
+
+    let journeyClickStartEnabled = loadJourneyClickStart();
+
+    function updateJourneyClickStartUi() {
+      if (journeyClickStartToggle) journeyClickStartToggle.checked = journeyClickStartEnabled;
+    }
     let latestStyleSnapshot: Record<string, unknown> | null = null;
     let styleSnapshotReady = false;
     let captureStylePositions: () => Record<string, any> = () => ({});
@@ -770,6 +792,7 @@ const runtimeConfig = {
         stationSettings: JSON.parse(JSON.stringify(stationSettings ?? {})),
         focusPlaybackProgram: JSON.parse(JSON.stringify(focusPlaybackProgram ?? {})),
         unpairedGlbLimits: JSON.parse(JSON.stringify(unpairedGlbLimits ?? {})),
+        journeyClickStart: journeyClickStartEnabled,
         positions
       };
     }
@@ -2044,6 +2067,23 @@ const runtimeConfig = {
       getStyleExplorationMode() {
         return styleExplorationEnabled;
       },
+      getJourneyClickStart() {
+        return journeyClickStartEnabled;
+      },
+      setJourneyClickStart(enabled: boolean) {
+        journeyClickStartEnabled = Boolean(enabled);
+        try {
+          window.localStorage.setItem(
+            journeyClickStartStorageKey,
+            String(journeyClickStartEnabled)
+          );
+        } catch {}
+        updateJourneyClickStartUi();
+        window.dispatchEvent(new CustomEvent("webrev:journey-click-start", {
+          detail: { enabled: journeyClickStartEnabled }
+        }));
+        return journeyClickStartEnabled;
+      },
       setStyleExplorationMode(enabled: boolean) {
         styleExplorationEnabled = Boolean(enabled);
         try {
@@ -2054,6 +2094,7 @@ const runtimeConfig = {
           styleSnapshotReady = false;
         }
         updateStyleExplorationUi();
+        updateJourneyClickStartUi();
         window.dispatchEvent(new CustomEvent("webrev:style-exploration-mode", {
           detail: { enabled: styleExplorationEnabled }
         }));
@@ -2689,6 +2730,11 @@ const runtimeConfig = {
         assetPicker.disabled = hidden.length === 0;
       }
 
+      journeyClickStartToggle?.addEventListener("change", () => {
+        window.webrevPresentationSettings?.setJourneyClickStart(
+          journeyClickStartToggle.checked
+        );
+      });
       styleExplorationToggle?.addEventListener("change", () => {
         window.webrevPresentationSettings?.setStyleExplorationMode(
           styleExplorationToggle.checked
@@ -4266,7 +4312,7 @@ const runtimeConfig = {
         return resolved.length ? resolved : base;
       }
 
-      function trackCatalog() {
+      function trackCatalog(): Array<{ name: string; url: string }> {
         return (Array.isArray(config.musicTracks) ? config.musicTracks : [])
           .filter((track: any) =>
             typeof track?.name === "string" &&
@@ -4292,7 +4338,7 @@ const runtimeConfig = {
 
       function unassignedTracks() {
         const assigned = globallyAssignedTrackNames();
-        return trackCatalog().filter((track) => !assigned.has(track.name));
+        return trackCatalog().filter((track: { name: string; url: string }) => !assigned.has(track.name));
       }
 
       function visiblePlaneGlbs(stationIndex = arrivingAt) {
@@ -4309,49 +4355,87 @@ const runtimeConfig = {
           configuredAssetFocusTrack(obj.name);
 
         if (assigned) {
-          return catalog.find((track) => track.name === assigned) ?? null;
+          return catalog.find((track: { name: string; url: string }) => track.name === assigned) ?? null;
         }
 
         const fallback = unassignedTracks();
         if (!fallback.length) return null;
 
         const planeObjects = visiblePlaneGlbs(arrivingAt);
-        const unpairedObjects = planeObjects.filter((candidate) => {
+        const unpairedObjects = planeObjects.filter((candidate: SceneObject) => {
           const candidateAssigned =
             assetFocusAudioState[candidate.name]?.track ??
             configuredAssetFocusTrack(candidate.name);
           return !candidateAssigned;
         });
-        const index = Math.max(0, unpairedObjects.findIndex((candidate) => candidate.name === obj.name));
+        const index = Math.max(0, unpairedObjects.findIndex((candidate: SceneObject) => candidate.name === obj.name));
         return fallback[index % fallback.length] ?? fallback[0] ?? null;
+      }
+
+      function firstJourneyObject(stationIndex: number) {
+        return visiblePlaneGlbs(stationIndex)[0] ?? null;
+      }
+
+      function startJourneyObject(obj: SceneObject) {
+        const track = focusTrackForObject(obj);
+        requestFocusExperience(
+          obj,
+          track ? { url: track.url, track: track.name } : undefined
+        );
+      }
+
+      function continueJourneyToNextPlane() {
+        if (!stations.length) return;
+        const nextStationIndex = (arrivingAt + 1) % stations.length;
+        const nextObject = firstJourneyObject(nextStationIndex);
+
+        if (!nextObject) {
+          requestStation(nextStationIndex);
+          return;
+        }
+
+        const track = focusTrackForObject(nextObject);
+        pendingFocusPlaylistEntry = {
+          stationId: stations[nextStationIndex]?.id ?? "",
+          stationIndex: nextStationIndex,
+          assetName: nextObject.name,
+          track: track?.name ?? "",
+          url: track?.url ?? ""
+        };
+        requestStation(nextStationIndex, true);
       }
 
       function stepFocusObject(direction: -1 | 1) {
         if (!focusExperience) return;
-        const objects = visiblePlaneGlbs(focusExperience.stationIndex);
+        const stationIndex = focusExperience.stationIndex;
+        const objects = visiblePlaneGlbs(stationIndex);
         if (!objects.length) return;
 
         let index = objects.findIndex(
-          (obj) => obj.name === focusExperience?.object.name
+          (obj: SceneObject) => obj.name === focusExperience?.object.name
         );
         if (index < 0) index = direction > 0 ? -1 : 0;
 
-        const nextIndex = (index + direction + objects.length) % objects.length;
+        if (direction > 0 && index >= objects.length - 1) {
+          continueJourneyToNextPlane();
+          return;
+        }
+
+        const nextIndex =
+          direction < 0 && index <= 0
+            ? objects.length - 1
+            : index + direction;
         const next = objects[nextIndex];
         if (!next) return;
 
-        const track = focusTrackForObject(next);
-        requestFocusExperience(
-          next,
-          track ? { url: track.url, track: track.name } : undefined
-        );
+        startJourneyObject(next);
 
         window.dispatchEvent(new CustomEvent("webrev:focus-object-step", {
           detail: {
             direction,
-            stationId: stations[focusExperience?.stationIndex ?? arrivingAt]?.id ?? activeStationId,
+            stationId: stations[stationIndex]?.id ?? activeStationId,
             objectName: next.name,
-            track: track?.name ?? ""
+            track: focusTrackForObject(next)?.name ?? ""
           }
         }));
       }
@@ -4663,7 +4747,12 @@ const runtimeConfig = {
               candidate.visible !== false &&
               candidate.name === pending.assetName
           );
-          if (obj) requestFocusExperience(obj);
+          if (obj) {
+            requestFocusExperience(
+              obj,
+              pending.url ? { url: pending.url, track: pending.track } : undefined
+            );
+          }
         }
 
         lookYaw += (targetYaw - lookYaw) * Math.min(1, dt * 4.0);
@@ -4970,7 +5059,7 @@ const runtimeConfig = {
           objectHeading.className = "edit-context-heading";
           objectHeading.textContent = obj.name;
           editContextMenu.appendChild(objectHeading);
-          addEditContextAction("Play This", () => requestFocusExperience(obj));
+          addEditContextAction("Play This", () => startJourneyObject(obj));
         }
 
         editContextMenu.style.left = `${Math.max(8, Math.min(window.innerWidth - 290, clientX))}px`;
@@ -5163,12 +5252,13 @@ const runtimeConfig = {
         const wasClick = draggedDistance < 6;
         grabbed = null;
         if (gameCanvas.hasPointerCapture(event.pointerId)) gameCanvas.releasePointerCapture(event.pointerId);
-        if (wasClick && obj.kind === "3d" && obj.visible !== false) {
-          const track = focusTrackForObject(obj);
-          requestFocusExperience(
-            obj,
-            track ? { url: track.url, track: track.name } : undefined
-          );
+        if (
+          wasClick &&
+          obj.kind === "3d" &&
+          obj.visible !== false &&
+          journeyClickStartEnabled
+        ) {
+          startJourneyObject(obj);
         } else if (wasClick && obj.kind !== "3d") {
           executeAction(obj.action);
         }
@@ -5201,12 +5291,13 @@ const runtimeConfig = {
         const y = event.clientY - rect.top;
         const hit = findHitObject(x, y);
         if (hit) {
-          if (hit.kind === "3d" && hit.visible !== false) {
+          if (
+            hit.kind === "3d" &&
+            hit.visible !== false &&
+            journeyClickStartEnabled
+          ) {
             const track = focusTrackForObject(hit);
-            requestFocusExperience(
-              hit,
-              track ? { url: track.url, track: track.name } : undefined
-            );
+            startJourneyObject(hit);
             status && (status.textContent =
               track
                 ? `Playing ${track.name.replace(/\.[^.]+$/, "")} · ${hit.name}`
