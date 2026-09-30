@@ -410,6 +410,8 @@ const runtimeConfig = {
         setAssetFocusAudio(name: string, patch: { track?: string }): void;
         getUnpairedGlbLimit(stationId?: string): number;
         setUnpairedGlbLimit(limit: number, stationId?: string): number;
+        getFallbackSongHistoryWindow(): number;
+        setFallbackSongHistoryWindow(count: number): number;
         getFocusPlaylist(): FocusPlaylistEntry[];
         setFocusPlaybackMode(mode: FocusPlaybackMode): PresentationSettingsSnapshot;
         setFocusPlaybackScope(scope: FocusPlaybackScope): PresentationSettingsSnapshot;
@@ -697,6 +699,7 @@ const runtimeConfig = {
     const styleExplorationStorageKey = "webrev:style-exploration:v1";
     const journeyClickStartStorageKey = "webrev:journey-click-start:v1";
     const unpairedGlbLimitStorageKey = "webrev:unpaired-glb-limit:v1";
+    const fallbackSongHistoryWindowStorageKey = "webrev:fallback-song-history-window:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
 
     function loadUnpairedGlbLimits() {
@@ -711,6 +714,17 @@ const runtimeConfig = {
     }
 
     let unpairedGlbLimits: Record<string, number> = loadUnpairedGlbLimits();
+
+    function loadFallbackSongHistoryWindow() {
+      try {
+        const raw = window.localStorage.getItem(fallbackSongHistoryWindowStorageKey);
+        const value = Number(raw);
+        if (Number.isFinite(value)) return Math.max(0, Math.floor(value));
+      } catch {}
+      return 2;
+    }
+
+    let fallbackSongHistoryWindow = loadFallbackSongHistoryWindow();
 
     function resolvedUnpairedGlbLimit(stationId?: string) {
       const specific = stationId ? Number(unpairedGlbLimits[stationId]) : NaN;
@@ -792,6 +806,7 @@ const runtimeConfig = {
         stationSettings: JSON.parse(JSON.stringify(stationSettings ?? {})),
         focusPlaybackProgram: JSON.parse(JSON.stringify(focusPlaybackProgram ?? {})),
         unpairedGlbLimits: JSON.parse(JSON.stringify(unpairedGlbLimits ?? {})),
+        fallbackSongHistoryWindow,
         journeyClickStart: journeyClickStartEnabled,
         positions
       };
@@ -2002,6 +2017,22 @@ const runtimeConfig = {
         saveUnpairedGlbLimits();
         return normalized;
       },
+      getFallbackSongHistoryWindow() {
+        return fallbackSongHistoryWindow;
+      },
+      setFallbackSongHistoryWindow(count: number) {
+        fallbackSongHistoryWindow = Math.max(0, Math.floor(Number(count) || 0));
+        try {
+          window.localStorage.setItem(
+            fallbackSongHistoryWindowStorageKey,
+            String(fallbackSongHistoryWindow)
+          );
+        } catch {}
+        window.dispatchEvent(new CustomEvent("webrev:fallback-song-history-window", {
+          detail: { count: fallbackSongHistoryWindow }
+        }));
+        return fallbackSongHistoryWindow;
+      },
       getFocusPlaylist() {
         return resolvedFocusPlaylistForApi().map((entry) => ({ ...entry }));
       },
@@ -2809,6 +2840,10 @@ const runtimeConfig = {
         renderSphereSettings();
       });
       window.addEventListener("webrev:asset-runtime-status", () => {
+        if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
+      });
+      window.addEventListener("webrev:fallback-song-history-window", () => {
+        // Policy is evaluated at selection time, so no scene rebuild is needed.
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
       window.addEventListener("webrev:unpaired-glb-limit", () => {
@@ -4200,6 +4235,32 @@ const runtimeConfig = {
       let focusAudioFadeFrame = 0;
       let focusAudioSourceUrl = "";
       let focusAudioCurrentAssetName = "";
+      const playedTrackHistory: string[] = [];
+
+      function rememberPlayedTrack(url: string) {
+        const track = trackCatalog().find(
+          (candidate: { name: string; url: string }) => candidate.url === url
+        );
+        if (!track) return;
+        playedTrackHistory.push(track.name);
+        const keep = Math.max(32, fallbackSongHistoryWindow + 16);
+        if (playedTrackHistory.length > keep) {
+          playedTrackHistory.splice(0, playedTrackHistory.length - keep);
+        }
+      }
+
+      function recentPlayedTrackNames() {
+        if (fallbackSongHistoryWindow <= 0) return new Set<string>();
+        return new Set(playedTrackHistory.slice(-fallbackSongHistoryWindow));
+      }
+
+      function historyEligibleTracks(
+        tracks: Array<{ name: string; url: string }>
+      ) {
+        const recent = recentPlayedTrackNames();
+        const eligible = tracks.filter((track) => !recent.has(track.name));
+        return eligible.length ? eligible : tracks;
+      }
 
       function resolvedFocusPlaylist(): FocusPlaylistEntry[] {
         const tracks = Array.isArray(config.musicTracks) ? config.musicTracks : [];
@@ -4366,26 +4427,36 @@ const runtimeConfig = {
         if (!presentationSettings.focusAudio.enabled) return null;
 
         const catalog = trackCatalog();
+        if (!catalog.length) return null;
+        const recent = recentPlayedTrackNames();
         const assigned =
           assetFocusAudioState[obj.name]?.track ??
           configuredAssetFocusTrack(obj.name);
 
-        if (assigned) {
-          return catalog.find((track: { name: string; url: string }) => track.name === assigned) ?? null;
+        // Explicit pairings remain the first preference unless history vetoes them.
+        if (assigned && !recent.has(assigned)) {
+          const paired = catalog.find(
+            (track: { name: string; url: string }) => track.name === assigned
+          );
+          if (paired) return paired;
         }
 
-        const fallback = unassignedTracks();
-        if (!fallback.length) return null;
+        // Unpaired songs are the preferred substitute. This also handles a paired
+        // GLB whose paired track is temporarily excluded by the history policy.
+        const unassignedEligible = historyEligibleTracks(unassignedTracks());
+        if (unassignedEligible.length) {
+          const planeObjects = visiblePlaneGlbs(arrivingAt);
+          const objectIndex = Math.max(
+            0,
+            planeObjects.findIndex((candidate: SceneObject) => candidate.name === obj.name)
+          );
+          return unassignedEligible[objectIndex % unassignedEligible.length] ?? null;
+        }
 
-        const planeObjects = visiblePlaneGlbs(arrivingAt);
-        const unpairedObjects = planeObjects.filter((candidate: SceneObject) => {
-          const candidateAssigned =
-            assetFocusAudioState[candidate.name]?.track ??
-            configuredAssetFocusTrack(candidate.name);
-          return !candidateAssigned;
-        });
-        const index = Math.max(0, unpairedObjects.findIndex((candidate: SceneObject) => candidate.name === obj.name));
-        return fallback[index % fallback.length] ?? fallback[0] ?? null;
+        // If every unassigned song is unavailable/missing, use any history-eligible
+        // catalog track. historyEligibleTracks gracefully relaxes when N blocks all.
+        const eligibleCatalog = historyEligibleTracks(catalog);
+        return eligibleCatalog[0] ?? null;
       }
 
       function planeJourneyEntries(stationIndex: number) {
@@ -4423,9 +4494,20 @@ const runtimeConfig = {
             candidate.name === entry.assetName
         );
         if (!obj) return;
+
+        const catalog = trackCatalog();
+        const recent = recentPlayedTrackNames();
+        let chosen = catalog.find(
+          (track: { name: string; url: string }) => track.name === entry.track
+        ) ?? null;
+
+        if (!chosen || recent.has(chosen.name)) {
+          chosen = focusTrackForObject(obj);
+        }
+
         requestFocusExperience(
           obj,
-          entry.url ? { url: entry.url, track: entry.track } : undefined
+          chosen ? { url: chosen.url, track: chosen.name } : undefined
         );
       }
 
@@ -4551,6 +4633,7 @@ const runtimeConfig = {
         focusAudioElement = audio;
         focusAudioSourceUrl = url;
         focusAudioCurrentAssetName = assetName;
+        rememberPlayedTrack(url);
 
         audio.addEventListener("ended", () => {
           if (focusAudioElement !== audio) return;
