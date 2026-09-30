@@ -78,6 +78,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
 >
   <canvas id="prism-rail-canvas" aria-label="Do It Your Way spatial presentation"></canvas>
   <canvas id="glb-layer" aria-hidden="true"></canvas>
+  <button type="button" id="rail-ride-next" class="rail-ride-next">
+    Take the Roller Coaster
+  </button>
   <button type="button" id="focus-song-prev" class="focus-song-overlay focus-song-overlay-left" aria-label="Previous song and object">
     <span aria-hidden="true">‹</span>
   </button>
@@ -385,6 +388,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
   const root = document.querySelector<HTMLElement>(".presentation[data-config]");
   const canvas = document.getElementById("prism-rail-canvas");
   const glbCanvas = document.getElementById("glb-layer");
+  const railRideNext = document.getElementById("rail-ride-next") as HTMLButtonElement | null;
   const settingsToggle = document.getElementById("sphere-settings-toggle") as HTMLButtonElement | null;
   const settingsPanel = document.getElementById("sphere-settings-panel") as HTMLElement | null;
   const settingsClose = document.getElementById("sphere-settings-close") as HTMLButtonElement | null;
@@ -3674,6 +3678,17 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         return Math.abs(cameraZ - targetZ) < 0.08;
       }
 
+      function updateRailRideControl() {
+        if (!railRideNext) return;
+        const canRide = arrived() && !focusExperience && presentationSettings.editor.mode === "none";
+        railRideNext.hidden = !canRide;
+        if (!canRide) return;
+        railRideNext.textContent =
+          arrivingAt >= stations.length - 1
+            ? "Take the Roller Coaster · Back to Start"
+            : "Take the Roller Coaster";
+      }
+
       function requestStation(index: number, preservePendingFocus = false) {
         if (!preservePendingFocus) pendingFocusPlaylistEntry = null;
         endFocusExperience();
@@ -4174,6 +4189,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         const dt = Math.min((now - previous) / 1000, 1 / 30);
         previous = now;
         update(now, dt);
+        updateRailRideControl();
 
         for (const model of threeObjects.values()) model.visible = false;
         for (const entry of imagePlanes.values()) entry.group.visible = false;
@@ -4659,6 +4675,12 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         stepFocusPlaylist(1);
       });
 
+      railRideNext?.addEventListener("click", () => {
+        if (!arrived() || focusExperience) return;
+        const nextIndex = arrivingAt >= stations.length - 1 ? 0 : arrivingAt + 1;
+        requestStation(nextIndex);
+      });
+
       window.addEventListener("keydown", (event) => {
         if (event.key === "ArrowRight") {
           event.preventDefault();
@@ -4715,6 +4737,36 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
     z-index:2;
     pointer-events:none;
     background:transparent;
+  }
+
+  .rail-ride-next {
+    position:absolute;
+    z-index:4;
+    left:50%;
+    bottom:52px;
+    transform:translateX(-50%);
+    min-height:44px;
+    padding:0 18px;
+    border:1px solid rgba(255,255,255,.24);
+    border-radius:999px;
+    background:rgba(7,9,12,.78);
+    color:#fff;
+    font:700 12px/1 ui-sans-serif,system-ui;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    cursor:pointer;
+    backdrop-filter:blur(10px);
+  }
+
+  .rail-ride-next:hover,
+  .rail-ride-next:focus-visible {
+    background:rgba(18,22,28,.94);
+    border-color:rgba(255,255,255,.42);
+    outline:none;
+  }
+
+  .rail-ride-next[hidden] {
+    display:none;
   }
 
   .focus-song-overlay {
