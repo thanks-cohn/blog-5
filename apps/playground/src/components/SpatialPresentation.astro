@@ -132,6 +132,12 @@ const runtimeConfig = {
         </select>
       </label>
       <label class="sphere-asset-add">
+        <span>Plane</span>
+        <select id="focus-song-station-picker" disabled>
+          <option value="">Choose a GLB first…</option>
+        </select>
+      </label>
+      <label class="sphere-asset-add">
         <span>Song</span>
         <select id="focus-song-track-picker" disabled>
           <option value="">Choose a song…</option>
@@ -413,6 +419,7 @@ const runtimeConfig = {
   const apiSettingsControls = document.getElementById("api-settings-controls");
   const assetPicker = document.getElementById("sphere-asset-picker") as HTMLSelectElement | null;
   const focusSongGlbPicker = document.getElementById("focus-song-glb-picker") as HTMLSelectElement | null;
+  const focusSongStationPicker = document.getElementById("focus-song-station-picker") as HTMLSelectElement | null;
   const focusSongTrackPicker = document.getElementById("focus-song-track-picker") as HTMLSelectElement | null;
   const focusSongPairingStatus = document.getElementById("focus-song-pairing-status") as HTMLElement | null;
   const frontAssetsList = document.getElementById("front-assets-list");
@@ -1514,39 +1521,46 @@ const runtimeConfig = {
     }
 
     function resolvedFocusPlaylistForApi(): FocusPlaylistEntry[] {
-      const tracks = Array.isArray(config.musicTracks) ? config.musicTracks : [];
-      const trackUrl = new Map<string, string>(
-        tracks
-          .filter((track: any) => typeof track?.name === "string" && typeof track?.url === "string")
-          .map((track: any) => [String(track.name), String(track.url)])
-      );
-      const assets = allSceneAssetNames();
+      const tracks = (Array.isArray(config.musicTracks) ? config.musicTracks : [])
+        .filter((track: any) => typeof track?.name === "string" && typeof track?.url === "string");
       const stationIndexes =
         presentationSettings.focusAudio.scope === "all"
           ? stationDefinitions.map((_: any, index: number) => index)
           : [Math.max(0, stationDefinitions.findIndex((station: any) => station.id === activeStationId))];
 
-      const playlist: FocusPlaylistEntry[] = [];
-      for (const stationIndex of stationIndexes) {
-        const station = stationDefinitions[stationIndex];
-        if (!station) continue;
-        for (const asset of assets.filter((candidate) => candidate.stationId === station.id)) {
-          if (asset.kind !== "3d") continue;
-          const assigned =
-            assetFocusAudioState[asset.name]?.track ?? configuredAssetFocusTrack(asset.name);
-          if (!assigned) continue;
-          const url = trackUrl.get(assigned);
-          if (!url) continue;
-          playlist.push({
-            stationId: station.id,
-            stationIndex,
-            assetName: asset.name,
-            track: assigned,
-            url
-          });
-        }
+      const glbs = allSceneAssetNames()
+        .filter((asset) =>
+          asset.uploaded &&
+          asset.kind === "3d" &&
+          stationIndexes.includes(
+            stationDefinitions.findIndex((station: any) => station.id === asset.stationId)
+          )
+        );
+
+      if (!glbs.length) return [];
+
+      const pairedByTrack = new Map<string, typeof glbs[number]>();
+      for (const asset of glbs) {
+        const assigned = assetFocusAudioState[asset.name]?.track ?? configuredAssetFocusTrack(asset.name);
+        if (assigned && !pairedByTrack.has(assigned)) pairedByTrack.set(assigned, asset);
       }
-      return playlist;
+
+      let fallbackIndex = 0;
+      return tracks.map((track: any) => {
+        const paired = pairedByTrack.get(String(track.name));
+        const asset = paired ?? glbs[fallbackIndex++ % glbs.length];
+        const stationIndex = Math.max(
+          0,
+          stationDefinitions.findIndex((station: any) => station.id === asset.stationId)
+        );
+        return {
+          stationId: asset.stationId,
+          stationIndex,
+          assetName: asset.name,
+          track: String(track.name),
+          url: String(track.url)
+        };
+      });
     }
 
     window.webrevPresentationSettings = {
@@ -2344,23 +2358,27 @@ const runtimeConfig = {
 
       function renderFocusSongPairing() {
         const api = window.webrevPresentationSettings;
-        if (!api || !focusSongGlbPicker || !focusSongTrackPicker) return;
+        if (!api || !focusSongGlbPicker || !focusSongTrackPicker || !focusSongStationPicker) return;
 
         const currentGlb = focusSongGlbPicker.value;
         const glbs = api
-          .listAssets(activeStationId)
-          .filter((asset) => asset.kind === "3d" && asset.uploaded);
+          .listAssetLibrary()
+          .filter((asset) => asset.kind === "3d" && asset.uploaded)
+          .sort((a, b) => a.name.localeCompare(b.name));
 
         focusSongGlbPicker.replaceChildren();
         const glbPrompt = document.createElement("option");
         glbPrompt.value = "";
-        glbPrompt.textContent = glbs.length ? "Choose a GLB…" : "No GLBs in this level";
+        glbPrompt.textContent = glbs.length ? "Choose any GLB…" : "No GLBs uploaded";
         focusSongGlbPicker.appendChild(glbPrompt);
 
         for (const glb of glbs) {
+          const stationLabel =
+            stations.find((station: any) => station.id === glb.stationId)?.label ??
+            glb.stationId;
           const option = document.createElement("option");
           option.value = glb.name;
-          option.textContent = glb.name;
+          option.textContent = `${glb.name} · ${stationLabel}`;
           option.selected = glb.name === currentGlb;
           focusSongGlbPicker.appendChild(option);
         }
@@ -2370,15 +2388,31 @@ const runtimeConfig = {
         }
 
         const selectedGlb = focusSongGlbPicker.value;
+        const selectedStation = selectedGlb ? api.getAssetStation(selectedGlb) ?? "" : "";
         const assigned = selectedGlb
           ? api.getAssetFocusAudio(selectedGlb)?.track ?? ""
           : "";
+
+        focusSongStationPicker.replaceChildren();
+        const stationPrompt = document.createElement("option");
+        stationPrompt.value = "";
+        stationPrompt.textContent = selectedGlb ? "Choose plane…" : "Pick a GLB first";
+        focusSongStationPicker.appendChild(stationPrompt);
+        for (const station of stations) {
+          const option = document.createElement("option");
+          option.value = station.id;
+          option.textContent = station.label ?? station.id;
+          option.selected = station.id === selectedStation;
+          focusSongStationPicker.appendChild(option);
+        }
+        focusSongStationPicker.disabled = !selectedGlb;
+        focusSongStationPicker.value = selectedStation;
 
         focusSongTrackPicker.replaceChildren();
         const trackPrompt = document.createElement("option");
         trackPrompt.value = "";
         trackPrompt.textContent = selectedGlb
-          ? (config.musicTracks?.length ? "No song / use fallback" : "No songs in assets/music")
+          ? (config.musicTracks?.length ? "No fixed pairing" : "No songs in assets/music")
           : "Pick a GLB first";
         focusSongTrackPicker.appendChild(trackPrompt);
 
@@ -2394,11 +2428,12 @@ const runtimeConfig = {
         focusSongTrackPicker.value = assigned;
 
         if (focusSongPairingStatus) {
+          const stationLabel =
+            stations.find((station: any) => station.id === selectedStation)?.label ??
+            selectedStation;
           focusSongPairingStatus.textContent = selectedGlb
-            ? assigned
-              ? `${selectedGlb} → ${assigned}`
-              : `${selectedGlb} → no song assigned`
-            : "Pick a GLB, then choose its song.";
+            ? `${selectedGlb} · ${stationLabel || "unassigned"} · ${assigned || "no fixed song"}`
+            : "Choose any uploaded GLB, then assign its plane and optional song.";
         }
       }
 
@@ -2469,6 +2504,12 @@ const runtimeConfig = {
         assetPicker.value = "";
       });
       focusSongGlbPicker?.addEventListener("change", () => {
+        renderFocusSongPairing();
+      });
+      focusSongStationPicker?.addEventListener("change", () => {
+        const name = focusSongGlbPicker?.value ?? "";
+        if (!name || !focusSongStationPicker.value) return;
+        window.webrevPresentationSettings?.setAssetStation(name, focusSongStationPicker.value);
         renderFocusSongPairing();
       });
       focusSongTrackPicker?.addEventListener("change", () => {
@@ -3856,23 +3897,43 @@ const runtimeConfig = {
             ? stations.map((_: any, index: number) => index)
             : [arrivingAt];
 
-        const base: FocusPlaylistEntry[] = [];
+        const visibleGlbs: Array<{ stationId: string; stationIndex: number; assetName: string }> = [];
         for (const stationIndex of stationIndexes) {
           const station = stations[stationIndex];
           if (!station) continue;
           for (const obj of layouts[stationIndex] ?? []) {
             if (obj.kind !== "3d" || obj.visible === false) continue;
-            const assigned =
-              assetFocusAudioState[obj.name]?.track ?? configuredAssetFocusTrack(obj.name);
-            if (!assigned) continue;
-            const url = trackUrl.get(assigned);
-            if (!url) continue;
-            base.push({
+            visibleGlbs.push({
               stationId: station.id,
               stationIndex,
-              assetName: obj.name,
-              track: assigned,
-              url
+              assetName: obj.name
+            });
+          }
+        }
+
+        const base: FocusPlaylistEntry[] = [];
+        if (visibleGlbs.length) {
+          const pairedByTrack = new Map<string, typeof visibleGlbs[number]>();
+          for (const visual of visibleGlbs) {
+            const assigned =
+              assetFocusAudioState[visual.assetName]?.track ??
+              configuredAssetFocusTrack(visual.assetName);
+            if (assigned && !pairedByTrack.has(assigned)) {
+              pairedByTrack.set(assigned, visual);
+            }
+          }
+
+          let fallbackIndex = 0;
+          for (const track of tracks) {
+            if (typeof track?.name !== "string" || typeof track?.url !== "string") continue;
+            const paired = pairedByTrack.get(String(track.name));
+            const visual = paired ?? visibleGlbs[fallbackIndex++ % visibleGlbs.length];
+            base.push({
+              stationId: visual.stationId,
+              stationIndex: visual.stationIndex,
+              assetName: visual.assetName,
+              track: String(track.name),
+              url: String(track.url)
             });
           }
         }
@@ -4393,11 +4454,17 @@ const runtimeConfig = {
         editContextMenu.appendChild(button);
       }
 
-      function requestFocusExperience(obj: SceneObject) {
-        // Selecting a different GLB is always authoritative, even while another
-        // focus song is already playing. The existing audio source is stopped
-        // and the newly paired track is primed immediately from this user gesture.
-        primeFocusAudio(obj);
+      function requestFocusExperience(
+        obj: SceneObject,
+        audioOverride?: { url: string; track: string }
+      ) {
+        // A direct object selection uses its saved pairing. Playlist overflow may
+        // temporarily display this GLB for an unpaired song without changing the pairing.
+        if (audioOverride?.url) {
+          playFocusAudioSource(audioOverride.url, obj.name, 0);
+        } else {
+          primeFocusAudio(obj);
+        }
         beginFocusExperience(obj);
         window.dispatchEvent(new CustomEvent("webrev:focus-experience-request", {
           detail: {
@@ -4433,7 +4500,7 @@ const runtimeConfig = {
             candidate.name === entry.assetName
         );
         if (!obj) return;
-        requestFocusExperience(obj);
+        requestFocusExperience(obj, { url: entry.url, track: entry.track });
       }
 
       function stepFocusPlaylist(direction: -1 | 1) {
