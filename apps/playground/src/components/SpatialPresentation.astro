@@ -404,6 +404,8 @@ const runtimeConfig = {
         setAssetMotion(name: string, motion: ObjectMotion): void;
         getAssetFocusAudio(name: string): { track: string } | null;
         setAssetFocusAudio(name: string, patch: { track?: string }): void;
+        getUnpairedGlbLimit(stationId?: string): number;
+        setUnpairedGlbLimit(limit: number, stationId?: string): number;
         getFocusPlaylist(): FocusPlaylistEntry[];
         setFocusPlaybackMode(mode: FocusPlaybackMode): PresentationSettingsSnapshot;
         setFocusPlaybackScope(scope: FocusPlaybackScope): PresentationSettingsSnapshot;
@@ -686,7 +688,39 @@ const runtimeConfig = {
     const assetFocusAudioStorageKey = "webrev:asset-focus-audio:v1";
     const spatialEnvelopeStorageKey = "webrev:spatial-envelope:v1";
     const styleExplorationStorageKey = "webrev:style-exploration:v1";
+    const unpairedGlbLimitStorageKey = "webrev:unpaired-glb-limit:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
+
+    function loadUnpairedGlbLimits() {
+      let stored: Record<string, number> = {};
+      try {
+        stored = JSON.parse(window.localStorage.getItem(unpairedGlbLimitStorageKey) ?? "{}");
+      } catch {}
+      return {
+        global: Math.max(0, Math.floor(Number(stored.global ?? 4))),
+        ...stored
+      };
+    }
+
+    let unpairedGlbLimits = loadUnpairedGlbLimits();
+
+    function resolvedUnpairedGlbLimit(stationId?: string) {
+      const specific = stationId ? Number(unpairedGlbLimits[stationId]) : NaN;
+      if (Number.isFinite(specific)) return Math.max(0, Math.floor(specific));
+      return Math.max(0, Math.floor(Number(unpairedGlbLimits.global ?? 4)));
+    }
+
+    function saveUnpairedGlbLimits() {
+      try {
+        window.localStorage.setItem(
+          unpairedGlbLimitStorageKey,
+          JSON.stringify(unpairedGlbLimits)
+        );
+      } catch {}
+      window.dispatchEvent(new CustomEvent("webrev:unpaired-glb-limit", {
+        detail: { ...unpairedGlbLimits }
+      }));
+    }
 
     function loadStyleExplorationMode() {
       try {
@@ -735,6 +769,7 @@ const runtimeConfig = {
         spatialEnvelope: JSON.parse(JSON.stringify(spatialEnvelopeState ?? {})),
         stationSettings: JSON.parse(JSON.stringify(stationSettings ?? {})),
         focusPlaybackProgram: JSON.parse(JSON.stringify(focusPlaybackProgram ?? {})),
+        unpairedGlbLimits: JSON.parse(JSON.stringify(unpairedGlbLimits ?? {})),
         positions
       };
     }
@@ -1934,6 +1969,16 @@ const runtimeConfig = {
         if (typeof patch?.track === "string") assetFocusAudioState[name].track = patch.track;
         saveAssetFocusAudioState();
       },
+      getUnpairedGlbLimit(stationId?: string) {
+        return resolvedUnpairedGlbLimit(stationId);
+      },
+      setUnpairedGlbLimit(limit: number, stationId?: string) {
+        const normalized = Math.max(0, Math.floor(Number(limit) || 0));
+        if (stationId) unpairedGlbLimits[stationId] = normalized;
+        else unpairedGlbLimits.global = normalized;
+        saveUnpairedGlbLimits();
+        return normalized;
+      },
       getFocusPlaylist() {
         return resolvedFocusPlaylistForApi().map((entry) => ({ ...entry }));
       },
@@ -2709,6 +2754,10 @@ const runtimeConfig = {
       window.addEventListener("webrev:asset-runtime-status", () => {
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
+      window.addEventListener("webrev:unpaired-glb-limit", () => {
+        rebuildAssetLayouts();
+        if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
+      });
       window.addEventListener("webrev:asset-focus-audio", () => {
         // Pairing/unpairing a GLB changes whether it participates in the live scene.
         // Rebuild immediately so Settings acts like an activation control.
@@ -2976,22 +3025,40 @@ const runtimeConfig = {
 
       function generateLayout(station: any, index: number): SceneObject[] {
         const rand = rngFor(station, index);
-        const allDiscovered = (Array.isArray(config.assetInventory) ? config.assetInventory : [])
-          .filter((asset: any) => {
-            const onThisStation =
-              (assetStationState[asset.name] ?? inferredStationForAsset(asset)) === station.id;
-            if (!onThisStation) return false;
+        const stationInventory = (Array.isArray(config.assetInventory) ? config.assetInventory : [])
+          .filter((asset: any) =>
+            (assetStationState[asset.name] ?? inferredStationForAsset(asset)) === station.id
+          );
 
-            // Keep the global library broad, but keep the live Three.js scene lean.
-            // 2D assets remain available as before. A GLB is instantiated only when
-            // it has an explicit song pairing, which acts as the current "active"
-            // flag for the experience.
-            if (asset?.kind !== "3d") return true;
-            const pairedTrack =
-              assetFocusAudioState[asset.name]?.track ??
-              configuredAssetFocusTrack(asset.name);
-            return Boolean(pairedTrack);
-          });
+        const paired3d = stationInventory.filter((asset: any) => {
+          if (asset?.kind !== "3d") return false;
+          const pairedTrack =
+            assetFocusAudioState[asset.name]?.track ??
+            configuredAssetFocusTrack(asset.name);
+          return Boolean(pairedTrack);
+        });
+
+        const unpaired3d = stationInventory.filter((asset: any) => {
+          if (asset?.kind !== "3d") return false;
+          const pairedTrack =
+            assetFocusAudioState[asset.name]?.track ??
+            configuredAssetFocusTrack(asset.name);
+          return !pairedTrack;
+        });
+
+        const unpairedLimit = resolvedUnpairedGlbLimit(station.id);
+        const shuffledUnpaired = [...unpaired3d];
+        for (let i = shuffledUnpaired.length - 1; i > 0; i--) {
+          const j = Math.floor(rand() * (i + 1));
+          [shuffledUnpaired[i], shuffledUnpaired[j]] =
+            [shuffledUnpaired[j], shuffledUnpaired[i]];
+        }
+
+        const allDiscovered = [
+          ...stationInventory.filter((asset: any) => asset?.kind !== "3d"),
+          ...paired3d,
+          ...shuffledUnpaired.slice(0, unpairedLimit)
+        ];
         const displayMainImageAsFloatingObject =
           station?.mainImage?.displayAsFloatingObject ??
           arrangement?.mainImage?.displayAsFloatingObject ??
