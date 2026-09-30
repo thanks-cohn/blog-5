@@ -1986,6 +1986,7 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         cameraStart: Vec3;
       };
       let focusExperience: FocusExperienceState | null = null;
+      let pendingFocusPlaylistEntry: FocusPlaylistEntry | null = null;
 
       const layouts = stations.map((station: any, index: number) => generateLayout(station, index));
       ensureThree();
@@ -3662,7 +3663,8 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
         return Math.abs(cameraZ - targetZ) < 0.08;
       }
 
-      function requestStation(index: number) {
+      function requestStation(index: number, preservePendingFocus = false) {
+        if (!preservePendingFocus) pendingFocusPlaylistEntry = null;
         endFocusExperience();
         arrivingAt = Math.max(0, Math.min(stations.length - 1, index));
         activeStationId = stations[arrivingAt]?.id ?? activeStationId;
@@ -4105,6 +4107,18 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           cameraZ = targetZ;
         }
 
+        if (pendingFocusPlaylistEntry && arrived()) {
+          const pending = pendingFocusPlaylistEntry;
+          pendingFocusPlaylistEntry = null;
+          const obj = (layouts[pending.stationIndex] ?? []).find(
+            (candidate: SceneObject) =>
+              candidate.kind === "3d" &&
+              candidate.visible !== false &&
+              candidate.name === pending.assetName
+          );
+          if (obj) requestFocusExperience(obj);
+        }
+
         lookYaw += (targetYaw - lookYaw) * Math.min(1, dt * 4.0);
         lookPitch += (targetPitch - lookPitch) * Math.min(1, dt * 4.0);
         updateObjects(now, dt);
@@ -4264,13 +4278,17 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
       function focusPlaylistEntry(entry: FocusPlaylistEntry | undefined) {
         if (!entry) return;
         if (entry.stationIndex !== arrivingAt) {
-          requestStation(entry.stationIndex);
-          // Station changes load that station's saved settings. Playback intent
-          // belongs to the active journey, so immediately re-apply it.
+          // Cross-plane playback must preserve the journey itself: ride the
+          // visible prism/string route first, then enter the destination object
+          // only after the camera has physically arrived at that plane.
+          pendingFocusPlaylistEntry = entry;
+          requestStation(entry.stationIndex, true);
           presentationSettings.focusAudio.scope =
             focusPlaybackProgram.scope === "station" ? "station" : "all";
           presentationSettings.focusAudio.playbackMode = "zone-cycle";
+          return;
         }
+
         const obj = (layouts[entry.stationIndex] ?? []).find(
           (candidate: SceneObject) =>
             candidate.kind === "3d" &&
