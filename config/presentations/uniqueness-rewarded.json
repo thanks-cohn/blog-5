@@ -102,7 +102,10 @@
       "fadeInMs": 1100,
       "fadeOutMs": 1800
     },
-    "assetNamingRule": "Assets are assigned by artworkName prefix. Any non-empty unique suffix is valid; numeric suffixes are optional."
+    "assetNamingRule": "Assets are assigned by artworkName prefix. Any non-empty unique suffix is valid; numeric suffixes are optional.",
+    "mainImage": {
+      "displayAsFloatingObject": false
+    }
   },
   "stations": [
     {
@@ -123,7 +126,10 @@
         "layer": "near",
         "hideBehindImage": false
       },
-      "centerImage": "first-light-center.jpg"
+      "centerImage": "first-light-center.jpg",
+      "mainImage": {
+        "displayAsFloatingObject": false
+      }
     },
     {
       "id": "blue-room",
@@ -142,6 +148,9 @@
       "asset3d": {
         "layer": "middle",
         "hideBehindImage": true
+      },
+      "mainImage": {
+        "displayAsFloatingObject": false
       }
     },
     {
@@ -161,6 +170,9 @@
       "asset3d": {
         "layer": "middle",
         "hideBehindImage": true
+      },
+      "mainImage": {
+        "displayAsFloatingObject": false
       }
     }
   ],
