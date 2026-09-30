@@ -2706,11 +2706,10 @@ const runtimeConfig = {
         backAssetsList.replaceChildren();
 
         const assets = api.listAssets(activeStationId);
-        const library = api.listAssetLibrary();
-        const hidden = library
-          .filter((asset) => asset.stationId === activeStationId)
-          .map((asset) => api.listAssets(activeStationId).find((current) => current.name === asset.name))
-          .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset && asset.visible === false));
+        const library = api
+          .listAssetLibrary()
+          .filter((asset) => asset.uploaded)
+          .sort((a, b) => a.name.localeCompare(b.name));
 
         for (const asset of assets.filter((asset) => asset.visible !== false && asset.hemisphere !== "back")) {
           frontAssetsList.appendChild(makeAssetRowFromApi(asset));
@@ -2722,15 +2721,23 @@ const runtimeConfig = {
         assetPicker.replaceChildren();
         const prompt = document.createElement("option");
         prompt.value = "";
-        prompt.textContent = hidden.length ? "Choose an asset…" : "All assets are displayed";
+        prompt.textContent = library.length ? "Choose any uploaded asset…" : "No uploaded assets";
         assetPicker.appendChild(prompt);
-        for (const asset of hidden) {
+
+        for (const asset of library) {
           const option = document.createElement("option");
           option.value = asset.name;
-          option.textContent = asset.name;
+          const stationLabel =
+            stations.find((station: any) => station.id === asset.stationId)?.label ??
+            asset.stationId;
+          option.textContent =
+            asset.stationId === activeStationId
+              ? `${asset.name} · this plane`
+              : `${asset.name} · ${stationLabel}`;
           assetPicker.appendChild(option);
         }
-        assetPicker.disabled = hidden.length === 0;
+
+        assetPicker.disabled = library.length === 0;
       }
 
       journeyClickStartToggle?.addEventListener("change", () => {
@@ -2765,6 +2772,7 @@ const runtimeConfig = {
       assetPicker?.addEventListener("change", () => {
         const name = assetPicker.value;
         if (!name) return;
+        window.webrevPresentationSettings?.setAssetStation(name, activeStationId);
         window.webrevPresentationSettings?.setAssetHemisphere(name, "front");
         window.webrevPresentationSettings?.setAssetVisible(name, true);
         assetPicker.value = "";
