@@ -2687,12 +2687,9 @@ const runtimeConfig = { ...config, assetsByArtwork, centerImagesByArtwork, music
           0,
           Math.floor(Number(arrangement.proxyCount ?? sphere.defaultObjectCount ?? 10))
         );
-        const fallbackProxyCount = discovered.length === 0
-          ? (configuredProxyCount || Number(sphere.defaultObjectCount) || 10)
-          : 0;
         const extraProxyCount = displayMode === "assets-and-proxies"
           ? configuredProxyCount
-          : fallbackProxyCount;
+          : 0;
         const sceneItems = [
           ...discovered.map((asset: any) => ({ asset })),
           ...Array.from({ length: extraProxyCount }, () => ({ asset: undefined }))
