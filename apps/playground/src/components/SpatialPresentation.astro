@@ -46,13 +46,13 @@ const musicTracks = Object.entries(discoveredMusic)
   .sort((a, b) => a.name.localeCompare(b.name));
 
 const assetsByArtwork: Record<string, DiscoveredAsset[]> = {};
-const artworkNames = Array.from(
-  new Set(
+const artworkNames: string[] = Array.from(
+  new Set<string>(
     (Array.isArray(config?.stations) ? config.stations : [])
       .map((station: any) => String(station?.artworkName ?? "").trim())
-      .filter(Boolean)
+      .filter((name: string) => name.length > 0)
   )
-).sort((a, b) => b.length - a.length);
+).sort((a: string, b: string) => b.length - a.length);
 
 function registerAsset(path: string, url: string, kind: "2d" | "3d") {
   const file = path.split("/").pop() ?? "";
