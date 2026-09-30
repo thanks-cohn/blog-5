@@ -4181,13 +4181,98 @@ const runtimeConfig = {
         return resolved.length ? resolved : base;
       }
 
+      function trackCatalog() {
+        return (Array.isArray(config.musicTracks) ? config.musicTracks : [])
+          .filter((track: any) =>
+            typeof track?.name === "string" &&
+            typeof track?.url === "string"
+          )
+          .map((track: any) => ({
+            name: String(track.name),
+            url: String(track.url)
+          }));
+      }
+
+      function globallyAssignedTrackNames() {
+        const assigned = new Set<string>();
+        for (const asset of allSceneAssetNames()) {
+          if (asset.kind !== "3d") continue;
+          const track =
+            assetFocusAudioState[asset.name]?.track ??
+            configuredAssetFocusTrack(asset.name);
+          if (track) assigned.add(track);
+        }
+        return assigned;
+      }
+
+      function unassignedTracks() {
+        const assigned = globallyAssignedTrackNames();
+        return trackCatalog().filter((track) => !assigned.has(track.name));
+      }
+
+      function visiblePlaneGlbs(stationIndex = arrivingAt) {
+        return (layouts[stationIndex] ?? [])
+          .filter((obj: SceneObject) => obj.kind === "3d" && obj.visible !== false);
+      }
+
+      function focusTrackForObject(obj: SceneObject) {
+        if (!presentationSettings.focusAudio.enabled) return null;
+
+        const catalog = trackCatalog();
+        const assigned =
+          assetFocusAudioState[obj.name]?.track ??
+          configuredAssetFocusTrack(obj.name);
+
+        if (assigned) {
+          return catalog.find((track) => track.name === assigned) ?? null;
+        }
+
+        const fallback = unassignedTracks();
+        if (!fallback.length) return null;
+
+        const planeObjects = visiblePlaneGlbs(arrivingAt);
+        const unpairedObjects = planeObjects.filter((candidate) => {
+          const candidateAssigned =
+            assetFocusAudioState[candidate.name]?.track ??
+            configuredAssetFocusTrack(candidate.name);
+          return !candidateAssigned;
+        });
+        const index = Math.max(0, unpairedObjects.findIndex((candidate) => candidate.name === obj.name));
+        return fallback[index % fallback.length] ?? fallback[0] ?? null;
+      }
+
+      function stepFocusObject(direction: -1 | 1) {
+        if (!focusExperience) return;
+        const objects = visiblePlaneGlbs(focusExperience.stationIndex);
+        if (!objects.length) return;
+
+        let index = objects.findIndex(
+          (obj) => obj.name === focusExperience?.object.name
+        );
+        if (index < 0) index = direction > 0 ? -1 : 0;
+
+        const nextIndex = (index + direction + objects.length) % objects.length;
+        const next = objects[nextIndex];
+        if (!next) return;
+
+        const track = focusTrackForObject(next);
+        requestFocusExperience(
+          next,
+          track ? { url: track.url, track: track.name } : undefined
+        );
+
+        window.dispatchEvent(new CustomEvent("webrev:focus-object-step", {
+          detail: {
+            direction,
+            stationId: stations[focusExperience?.stationIndex ?? arrivingAt]?.id ?? activeStationId,
+            objectName: next.name,
+            track: track?.name ?? ""
+          }
+        }));
+      }
+
       function selectedFocusTrackUrl(obj: SceneObject) {
-        if (!presentationSettings.focusAudio.enabled) return "";
-        const assigned = assetFocusAudioState[obj.name]?.track ?? configuredAssetFocusTrack(obj.name);
-        const requested = assigned || presentationSettings.focusAudio.track;
-        const tracks = Array.isArray(config.musicTracks) ? config.musicTracks : [];
-        const selected = tracks.find((track: any) => track?.name === requested);
-        return typeof selected?.url === "string" ? selected.url : "";
+        return focusTrackForObject(obj)?.url ?? "";
       }
 
       function stopFocusAudio() {
@@ -4238,12 +4323,20 @@ const runtimeConfig = {
       }
 
       function primeFocusAudio(obj: SceneObject) {
-        const url = selectedFocusTrackUrl(obj);
-        playFocusAudioSource(url, obj.name, 0);
+        const track = focusTrackForObject(obj);
+        playFocusAudioSource(track?.url ?? "", obj.name, 0);
       }
 
       function advanceFocusPlaylist() {
         if (!focusExperience || presentationSettings.focusAudio.playbackMode === "loop-item") return;
+
+        // While focused on a plane, song completion advances to the next GLB on
+        // that same plane and wraps after the final object.
+        if (focusExperience.stationIndex === arrivingAt) {
+          stepFocusObject(1);
+          return;
+        }
+
         const playlist = resolvedFocusPlaylist();
         if (!playlist.length) return;
 
@@ -5025,13 +5118,15 @@ const runtimeConfig = {
       focusSongPrev?.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        stepFocusPlaylist(-1);
+        if (focusExperience) stepFocusObject(-1);
+        else stepFocusPlaylist(-1);
       });
 
       focusSongNext?.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        stepFocusPlaylist(1);
+        if (focusExperience) stepFocusObject(1);
+        else stepFocusPlaylist(1);
       });
 
       railRideNext?.addEventListener("click", () => {
@@ -5046,13 +5141,21 @@ const runtimeConfig = {
       window.addEventListener("keydown", (event) => {
         if (event.key === "ArrowRight") {
           event.preventDefault();
-          railRideDirection = 1;
-          requestStation(Math.min(stations.length - 1, arrivingAt + 1));
+          if (focusExperience) {
+            stepFocusObject(1);
+          } else {
+            railRideDirection = 1;
+            requestStation(Math.min(stations.length - 1, arrivingAt + 1));
+          }
         }
         if (event.key === "ArrowLeft") {
           event.preventDefault();
-          railRideDirection = -1;
-          requestStation(Math.max(0, arrivingAt - 1));
+          if (focusExperience) {
+            stepFocusObject(-1);
+          } else {
+            railRideDirection = -1;
+            requestStation(Math.max(0, arrivingAt - 1));
+          }
         }
         if (event.key === "Home") requestStation(0);
       });
