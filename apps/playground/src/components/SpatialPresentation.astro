@@ -699,6 +699,7 @@ const runtimeConfig = {
     let styleExplorationEnabled = loadStyleExplorationMode();
     let latestStyleSnapshot: Record<string, unknown> | null = null;
     let styleSnapshotReady = false;
+    let captureStylePositions: () => Record<string, any> = () => ({});
 
     function updateStyleExplorationUi(message?: string) {
       if (styleExplorationToggle) styleExplorationToggle.checked = styleExplorationEnabled;
@@ -719,23 +720,7 @@ const runtimeConfig = {
     }
 
     function buildStyleSnapshot(reason = "settings-save") {
-      const positions: Record<string, any> = {};
-      if (typeof layouts !== "undefined") {
-        for (const layout of layouts) {
-          for (const obj of layout) {
-            if (!obj.url) continue;
-            positions[obj.name] = {
-              x: obj.local.x,
-              y: obj.local.y,
-              z: obj.local.z,
-              size: obj.size,
-              spin: obj.spin,
-              hemisphere: obj.hemisphere ?? "front",
-              visible: obj.visible !== false
-            };
-          }
-        }
-      }
+      const positions = captureStylePositions();
 
       return {
         schemaVersion: 1,
@@ -1914,8 +1899,6 @@ const runtimeConfig = {
         if (!stationDefinitions.some((station: any) => station.id === stationId)) return;
         assetStationState[name] = stationId;
         saveAssetStationState();
-        rebuildAssetLayouts();
-        renderSphereSettings();
       },
       setAssetHemisphere(name: string, hemisphere: AssetHemisphere) {
         assetPlacement[name] ??= { hemisphere: "front", visible: true };
@@ -2227,6 +2210,24 @@ const runtimeConfig = {
       let pendingFocusPlaylistEntry: FocusPlaylistEntry | null = null;
 
       let layouts = stations.map((station: any, index: number) => generateLayout(station, index));
+      captureStylePositions = () => {
+        const positions: Record<string, any> = {};
+        for (const layout of layouts) {
+          for (const obj of layout) {
+            if (!obj.url) continue;
+            positions[obj.name] = {
+              x: obj.local.x,
+              y: obj.local.y,
+              z: obj.local.z,
+              size: obj.size,
+              spin: obj.spin,
+              hemisphere: obj.hemisphere ?? "front",
+              visible: obj.visible !== false
+            };
+          }
+        }
+        return positions;
+      };
       ensureThree();
       for (const layout of layouts) {
         for (const obj of layout) ensureThreeObject(obj);
@@ -2315,16 +2316,16 @@ const runtimeConfig = {
 
         const stationSelect = document.createElement("select");
         stationSelect.className = "sphere-motion-select";
-        stationSelect.setAttribute("aria-label", `Plane for ${asset.name}`);
+        stationSelect.setAttribute("aria-label", `Plane for ${obj.name}`);
         for (const station of stations) {
           const option = document.createElement("option");
           option.value = station.id;
           option.textContent = station.label ?? station.id;
-          option.selected = station.id === asset.stationId;
+          option.selected = station.id === window.webrevPresentationSettings?.getAssetStation(obj.name);
           stationSelect.appendChild(option);
         }
         stationSelect.addEventListener("change", () => {
-          window.webrevPresentationSettings?.setAssetStation(asset.name, stationSelect.value);
+          window.webrevPresentationSettings?.setAssetStation(obj.name, stationSelect.value);
         });
 
         row.append(name, stationSelect, side, motionSelect, remove);
