@@ -67,6 +67,22 @@ if (window.webrevPresentationSettings) {
 
 ---
 
+# Romantic presentation styling
+
+The current public presentation reads its romantic visual choices from `config/presentations/uniqueness-rewarded.json`:
+
+- per-plane plaque copy
+- plaque background color
+- plaque text color
+- plaque font family
+- Google Fonts import URL metadata
+- black starfield background
+- shooting-stars toggle
+
+The current presentation uses Rock Salt, neon-pink plaques, neon-yellow lettering, and the star/shooting-star behavior borrowed from the earlier `thanks-cohn/blog` presentation.
+
+On coarse-pointer phones, the presentation retains the left/right edge-arrow controls for stepping through focused objects/songs. Those arrows remain hidden on ordinary desktop layouts.
+
 # Default presentation mode
 
 The current public website defaults to a clean presentation-first experience:
