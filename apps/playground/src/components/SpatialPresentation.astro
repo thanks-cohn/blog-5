@@ -363,6 +363,7 @@ const runtimeConfig = {
     surface?: {
       side?: "inside";
       orientation?: { mode?: "upright-to-world" | "surface-native" };
+      depthMode?: "scene" | "foreground";
     };
     protectedRegions?: Array<{
       target: "current-main-panel" | "next-main-panel";
@@ -379,6 +380,8 @@ const runtimeConfig = {
       gapDeg?: number;
       tileAngularWidthDeg?: number;
       tileAngularHeightDeg?: number;
+      azimuthOffsetDeg?: number;
+      elevationOffsetDeg?: number;
     };
     media?: MediaEnvelopeMediaSource[];
     choreography?: {
@@ -5059,7 +5062,8 @@ const runtimeConfig = {
           },
           surface: {
             side: "inside",
-            orientation: { mode: "upright-to-world" }
+            orientation: { mode: "upright-to-world" },
+            depthMode: "foreground"
           },
           protectedRegions: [
             {
@@ -5081,7 +5085,9 @@ const runtimeConfig = {
             verticalArcDeg: 40,
             gapDeg: 0,
             tileAngularWidthDeg: 56,
-            tileAngularHeightDeg: 34
+            tileAngularHeightDeg: 34,
+            azimuthOffsetDeg: 18,
+            elevationOffsetDeg: 4
           },
           media: selected
             ? [{
@@ -5180,10 +5186,20 @@ const runtimeConfig = {
         const tileHeight = Math.max(4, Number(layout.tileAngularHeightDeg ?? Math.max(5, cellHeight - gap)));
 
         const camera = cameraPosition();
-        const forward =
-          mediaEnvelopeDirection(camera, origin) ??
-          ({ x: 0, y: 0, z: -1 } as Vec3);
-        const centerAngles = mediaEnvelopeAngles(forward);
+        // Surface coordinates are measured outward from the envelope origin.
+        // To place media on the side facing the viewer, point FROM the origin
+        // TO the camera. The previous camera->origin vector placed the tile on
+        // the far side of the sphere.
+        const cameraFacing =
+          mediaEnvelopeDirection(origin, camera) ??
+          ({ x: 0, y: 0, z: 1 } as Vec3);
+        const baseCenterAngles = mediaEnvelopeAngles(cameraFacing);
+        const centerAngles = {
+          azimuthDeg:
+            baseCenterAngles.azimuthDeg + Number(layout.azimuthOffsetDeg ?? 0),
+          elevationDeg:
+            baseCenterAngles.elevationDeg + Number(layout.elevationOffsetDeg ?? 0)
+        };
         const protectedDirections = mediaEnvelopeProtectedDirections(program, stationIndex, origin);
         const candidates: Array<{ azimuthDeg: number; elevationDeg: number }> = [];
 
@@ -5222,11 +5238,13 @@ const runtimeConfig = {
           );
           const created = createMediaEnvelopeTexture(source);
           const baseOpacity = Math.max(0, Math.min(1, Number(source.opacity ?? 1)));
+          const foreground = program.surface?.depthMode === "foreground";
           const material = new T3.MeshBasicMaterial({
             map: created.texture,
             transparent: true,
             opacity: baseOpacity,
             side: T3.DoubleSide,
+            depthTest: !foreground,
             depthWrite: false,
             toneMapped: false
           });
@@ -5236,7 +5254,7 @@ const runtimeConfig = {
             patch.centerOffset.y,
             patch.centerOffset.z
           );
-          mesh.renderOrder = -10;
+          mesh.renderOrder = foreground ? 9000 : -10;
           group.add(mesh);
           tiles.push({
             mediaId: source.id,
