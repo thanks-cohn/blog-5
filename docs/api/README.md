@@ -67,6 +67,20 @@ if (window.webrevPresentationSettings) {
 
 ---
 
+# Default presentation mode
+
+The current public website defaults to a clean presentation-first experience:
+
+- no visible settings gear or settings panel
+- no visible roller-coaster button
+- no instructional HUD text
+- Left/Right remain object iteration
+- Up/Down remain roller-coaster plane travel
+- right-click remains available as the presentation interaction surface
+- the lower text plaque uses a romantic pink presentation style and Cormorant Garamond via Google Fonts
+
+These are project-facing defaults layered over the runtime API. Editor/settings capabilities remain available programmatically and are not removed from the engine.
+
 # 1. General Presentation Settings
 
 ## `get(key?)`

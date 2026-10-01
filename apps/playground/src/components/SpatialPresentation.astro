@@ -155,9 +155,6 @@ const runtimeConfig = {
 >
   <canvas id="prism-rail-canvas" aria-label="Do It Your Way spatial presentation"></canvas>
   <canvas id="glb-layer" aria-hidden="true"></canvas>
-  <button type="button" id="rail-ride-next" class="rail-ride-next">
-    Take the Roller Coaster
-  </button>
   <button type="button" id="focus-song-prev" class="focus-song-overlay focus-song-overlay-left" aria-label="Previous song and object">
     <span aria-hidden="true">‹</span>
   </button>
@@ -167,16 +164,7 @@ const runtimeConfig = {
   <div class="sr-only" aria-live="polite" id="presentation-status"></div>
   <div id="edit-context-menu" class="edit-context-menu" hidden></div>
 
-  <button
-    type="button"
-    id="sphere-settings-toggle"
-    class="sphere-settings-toggle"
-    aria-label="Sphere asset settings"
-    aria-expanded="false"
-    aria-controls="sphere-settings-panel"
-  >⚙</button>
-
-  <aside id="sphere-settings-panel" class="sphere-settings-panel" hidden>
+  <aside id="sphere-settings-panel" class="sphere-settings-panel" hidden aria-hidden="true">
     <div class="sphere-settings-header">
       <div>
         <strong id="station-settings-title">Sphere assets</strong>
@@ -782,6 +770,17 @@ const runtimeConfig = {
   const envelopeDebugGlobes = new Map<string, any>();
   const imagePlanes = new Map<string, { group: any; mesh: any; texture: any; signature: string }>();
   const textPlanes = new Map<string, { mesh: any; texture: any; signature: string }>();
+
+  // Canvas text must be regenerated after the Google Font becomes available.
+  void document.fonts?.load('600 52px "Cormorant Garamond"').then(() => {
+    for (const entry of textPlanes.values()) {
+      entry.mesh.parent?.remove?.(entry.mesh);
+      entry.mesh.geometry?.dispose?.();
+      entry.mesh.material?.dispose?.();
+      entry.texture?.dispose?.();
+    }
+    textPlanes.clear();
+  }).catch(() => {});
   let focusPlaybackProgram: FocusPlaybackProgram = {
     scope: "all",
     order: "ordered",
@@ -6849,9 +6848,9 @@ const runtimeConfig = {
           const lum = (0.2126*rr + 0.7152*gg + 0.0722*bb)/255;
           tctx.fillStyle = lum > 0.55 ? "#171717" : "#f7f7f7";
           tctx.textBaseline = "top";
-          tctx.font = "700 46px ui-sans-serif, system-ui";
-          tctx.fillText(title, 54, 34, 916);
-          tctx.font = "30px ui-sans-serif, system-ui";
+          tctx.font = '600 52px "Cormorant Garamond", Georgia, serif';
+          tctx.fillText(title, 54, 28, 916);
+          tctx.font = '400 34px "Cormorant Garamond", Georgia, serif';
 
           const words = body.split(/\s+/);
           let line = "", y = 108;
@@ -6860,7 +6859,7 @@ const runtimeConfig = {
             if (tctx.measureText(candidate).width > 916 && line) {
               tctx.fillText(line, 54, y);
               line = word;
-              y += 40;
+              y += 42;
               if (y > 205) break;
             } else {
               line = candidate;
@@ -8115,7 +8114,7 @@ const runtimeConfig = {
         ctx.fillStyle = vignette;
         ctx.fillRect(0, 0, width, height);
 
-        drawHud();
+        // Default public experience is presentation mode: no instructional HUD.
         requestAnimationFrame(render);
       }
 
@@ -8754,6 +8753,8 @@ const runtimeConfig = {
 </script>
 
 <style>
+  @import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap");
+
   .presentation {
     position:fixed;
     inset:0;
@@ -8965,6 +8966,7 @@ const runtimeConfig = {
     backdrop-filter:blur(14px);
   }
 
+  .sphere-settings-panel { display:none !important; }
   .sphere-settings-panel[hidden] { display:none; }
 
   .sphere-settings-header {
@@ -9191,21 +9193,24 @@ const runtimeConfig = {
   .edit-context-menu {
     position:fixed;
     z-index:20;
-    width:250px;
-    padding:7px;
-    border:1px solid rgba(255,255,255,.16);
-    border-radius:12px;
-    background:rgba(15,18,23,.97);
-    box-shadow:0 18px 55px rgba(0,0,0,.48);
-    backdrop-filter:blur(14px);
+    width:264px;
+    padding:10px;
+    border:1px solid rgba(255,224,235,.42);
+    border-radius:20px;
+    background:
+      linear-gradient(145deg, rgba(47,25,36,.94), rgba(21,13,20,.96));
+    box-shadow:
+      0 24px 70px rgba(0,0,0,.5),
+      0 0 0 1px rgba(255,190,214,.07) inset;
+    backdrop-filter:blur(18px) saturate(1.15);
+    font-family:"Cormorant Garamond", Georgia, serif;
   }
 
   .edit-context-heading {
-    padding:9px 9px 5px;
-    color:rgba(255,255,255,.46);
-    font-size:10px;
-    font-weight:700;
-    letter-spacing:.12em;
+    padding:9px 11px 7px;
+    color:rgba(255,221,233,.72);
+    font:500 13px/1.2 "Cormorant Garamond", Georgia, serif;
+    letter-spacing:.09em;
     text-transform:uppercase;
   }
 
@@ -9213,19 +9218,22 @@ const runtimeConfig = {
     display:block;
     width:100%;
     border:0;
-    border-radius:8px;
+    border-radius:13px;
     background:transparent;
-    color:rgba(255,255,255,.88);
-    padding:9px 10px;
+    color:#fff5f8;
+    padding:10px 12px;
     text-align:left;
     cursor:pointer;
-    font:inherit;
-    font-size:12px;
+    font:500 17px/1.2 "Cormorant Garamond", Georgia, serif;
+    letter-spacing:.01em;
+    transition:background 140ms ease, transform 140ms ease, color 140ms ease;
   }
 
   .edit-context-action:hover,
   .edit-context-action.is-active {
-    background:rgba(255,255,255,.1);
+    background:rgba(247,170,199,.16);
+    color:#ffe7f0;
+    transform:translateX(2px);
   }
 
   .edit-context-action.is-active::before {
