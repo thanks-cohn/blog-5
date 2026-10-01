@@ -456,6 +456,7 @@ const runtimeConfig = {
         getRendererDebugState(): Record<string, unknown>;
         getAudioDebugState(): Record<string, unknown>;
         getRandomizationDebugState(): Record<string, unknown>;
+        getGlbSelectionDebugState(stationId?: string): Record<string, unknown> | null;
       };
       webrevPresentationSettings?: {
         get(key?: PresentationSettingKey): PresentationSettingsSnapshot | PresentationSettingValue;
@@ -1109,6 +1110,7 @@ const runtimeConfig = {
     };
 
     let randomGlbSelectionHistory: string[][] = [];
+    let randomGlbSelectionDebug: Array<Record<string, unknown>> = [];
 
     function normalizeRandomGlbDiversityPolicy(
       value: Partial<RandomGlbDiversityPolicy> | undefined
@@ -3170,6 +3172,7 @@ const runtimeConfig = {
 
       function generateAllLayouts() {
         randomGlbSelectionHistory = [];
+        randomGlbSelectionDebug = [];
         return stations.map((station: any, index: number) =>
           generateLayout(station, index)
         );
@@ -3299,6 +3302,9 @@ const runtimeConfig = {
             unpairedGlbLimit: window.webrevPresentationSettings?.getUnpairedGlbLimit(),
             diversityPolicy: JSON.parse(JSON.stringify(randomGlbDiversityPolicy)),
             glbSelectionHistory: randomGlbSelectionHistory.map((entry) => [...entry]),
+            glbSelectionDecisions: randomGlbSelectionDebug.map((entry) =>
+              JSON.parse(JSON.stringify(entry))
+            ),
             fallbackSongHistoryWindow, avoidCurrentPlaneSongs: avoidCurrentPlaneSongsForFallback
           },
           renderer: {
@@ -3332,7 +3338,15 @@ const runtimeConfig = {
         getJourneyDebugState: () => getDebugSnapshot().journey,
         getRendererDebugState: () => getDebugSnapshot().renderer,
         getAudioDebugState: () => getDebugSnapshot().audio,
-        getRandomizationDebugState: () => getDebugSnapshot().randomization
+        getRandomizationDebugState: () => getDebugSnapshot().randomization,
+        getGlbSelectionDebugState(stationId = activeStationId) {
+          const randomization = getDebugSnapshot().randomization as {
+            glbSelectionDecisions?: Array<Record<string, unknown>>;
+          };
+          return randomization.glbSelectionDecisions?.find(
+            (entry) => entry.stationId === stationId
+          ) ?? null;
+        }
       };
 
       function rebuildAssetLayouts() {
@@ -4158,6 +4172,9 @@ const runtimeConfig = {
         let preferred = randomGlbDiversityPolicy.avoidWithinRun
           ? unpaired3d.filter((asset: any) => !usedEarlier.has(asset.name))
           : [...unpaired3d];
+        const afterWithinRunCandidates = preferred.map(
+          (asset: any) => String(asset.name)
+        );
 
         // Adjacent-plane repeats are a stronger visual repetition, so avoid them
         // whenever there are enough alternatives.
@@ -4168,6 +4185,10 @@ const runtimeConfig = {
           if (nonAdjacent.length >= targetCount) preferred = nonAdjacent;
         }
 
+        const afterAdjacentCandidates = preferred.map(
+          (asset: any) => String(asset.name)
+        );
+
         let sampledUnpaired = weightedRandomGlbSample(
           preferred,
           Math.min(targetCount, preferred.length),
@@ -4177,6 +4198,7 @@ const runtimeConfig = {
 
         // If the never-used pool is exhausted, fill from previously used GLBs,
         // still preferring non-adjacent choices and applying distance penalties.
+        let fallbackCandidates: string[] = [];
         if (sampledUnpaired.length < targetCount) {
           const selectedNames = new Set(
             sampledUnpaired.map((asset: any) => asset.name)
@@ -4194,6 +4216,10 @@ const runtimeConfig = {
             }
           }
 
+          fallbackCandidates = fallbackPool.map(
+            (asset: any) => String(asset.name)
+          );
+
           sampledUnpaired = [
             ...sampledUnpaired,
             ...weightedRandomGlbSample(
@@ -4207,6 +4233,59 @@ const runtimeConfig = {
 
         randomGlbSelectionHistory[index] =
           sampledUnpaired.map((asset: any) => String(asset.name));
+
+        const glbInventoryState = fullInventory
+          .filter((asset: any) => asset?.kind === "3d")
+          .map((asset: any) => {
+            const focusTrack =
+              assetFocusAudioState[asset.name]?.track ??
+              configuredAssetFocusTrack(asset.name);
+            return {
+              name: String(asset.name),
+              assignedStationId:
+                assetStationState[asset.name] ?? inferredStationForAsset(asset),
+              focusTrack: focusTrack || null,
+              paired: Boolean(focusTrack),
+              randomPoolEligible: !focusTrack,
+              hemisphere: assetPlacement[asset.name]?.hemisphere ?? "front",
+              visible: assetPlacement[asset.name]?.visible ?? true
+            };
+          });
+
+        randomGlbSelectionDebug[index] = {
+          stationId: String(station.id),
+          stationIndex: index,
+          policy: {
+            unpaired: JSON.parse(JSON.stringify(unpairedPolicy)),
+            resolvedTargetCount: targetCount,
+            diversity: JSON.parse(JSON.stringify(randomGlbDiversityPolicy))
+          },
+          inventory: {
+            allGlbs: glbInventoryState,
+            assignedToPlane: stationInventory
+              .filter((asset: any) => asset?.kind === "3d")
+              .map((asset: any) => String(asset.name)),
+            pairedOnPlane: paired3d.map((asset: any) => String(asset.name)),
+            globalUnpairedPool: unpaired3d.map((asset: any) => String(asset.name))
+          },
+          history: {
+            usedEarlier: [...usedEarlier],
+            previousPlane: [...previousPlane]
+          },
+          candidates: {
+            beforeDiversityFilters: unpaired3d.map(
+              (asset: any) => String(asset.name)
+            ),
+            afterWithinRunFilter: afterWithinRunCandidates,
+            afterAdjacentFilter: afterAdjacentCandidates,
+            fallbackPool: fallbackCandidates
+          },
+          selectedRandomGlbs: sampledUnpaired.map((asset: any) => String(asset.name)),
+          explanation:
+            sampledUnpaired.length === 0
+              ? "No unpaired GLBs survived the current pool and diversity rules."
+              : `Selected ${sampledUnpaired.length} randomized GLB(s) from the global unpaired pool. GLBs with focus-track pairings are excluded from that pool by current runtime semantics.`
+        };
 
         const allDiscovered = [
           ...stationInventory.filter((asset: any) => asset?.kind !== "3d"),
