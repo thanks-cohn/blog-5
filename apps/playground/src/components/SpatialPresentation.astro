@@ -352,6 +352,7 @@ const runtimeConfig = {
     envelope?: {
       shape?: "sphere";
       origin?: { mode?: "focused-object" | "station-center"; offset?: Vec3 };
+      radius?: number;
       growth?: { mode?: "instant" | "timed"; durationMs?: number; easing?: "linear" | "easeOutCubic" };
     };
     coverage?: {
@@ -387,6 +388,13 @@ const runtimeConfig = {
     choreography?: {
       clock?: "binding";
       cues?: Array<Record<string, unknown>>;
+    };
+    lifecycle?: {
+      endOnMediaEnd?: boolean;
+    };
+    performance?: {
+      cullOutsideEnvelope?: boolean;
+      restoreOutsideAfterMs?: number;
     };
   };
 
@@ -686,6 +694,8 @@ const runtimeConfig = {
         getActiveMediaEnvelopeState(): MediaEnvelopeRuntimeState;
         getOversphereVideoSelectionPolicy(): OversphereVideoSelectionPolicy;
         setOversphereVideoSelectionPolicy(patch: Partial<OversphereVideoSelectionPolicy>): OversphereVideoSelectionPolicy;
+        getOversphereRadius(): number;
+        setOversphereRadius(radius: number): number;
         getOversphereVideoHistory(): {
           recent: string[];
           currentPlane: string[];
@@ -1330,6 +1340,11 @@ const runtimeConfig = {
     let oversphereCurrentPlaneVideoIds: string[] = [];
     let overspherePreviousPlaneVideoIds: string[] = [];
     let oversphereHistoryStationId: string | null = null;
+    let defaultOversphereRadius = Math.max(
+      3,
+      Number(config.oversphereLocations?.presentation?.radius ?? 7) || 7
+    );
+    let mediaEnvelopeOutsideRestoreAt = 0;
 
     function loadUnpairedGlbLimits() {
       let stored: Record<string, unknown> = {};
@@ -4748,6 +4763,11 @@ const runtimeConfig = {
         stationIndex: number,
         origin: Vec3
       ) {
+        const fixedRadius = Number(program.envelope?.radius);
+        if (Number.isFinite(fixedRadius) && fixedRadius > 0) {
+          return Math.max(2, fixedRadius);
+        }
+
         const coverage = program.coverage ?? {};
         const include = new Set(
           Array.isArray(coverage.include) && coverage.include.length
@@ -4829,7 +4849,7 @@ const runtimeConfig = {
         origin: Vec3
       ) {
         const policies =
-          Array.isArray(program.protectedRegions) && program.protectedRegions.length
+          Array.isArray(program.protectedRegions)
             ? program.protectedRegions
             : [
                 { target: "current-main-panel", mode: "avoid", angularRadiusDeg: 18 },
@@ -5043,12 +5063,21 @@ const runtimeConfig = {
           )
         );
         const selected = selectDefaultOversphereVideo(stationIndex);
+        const focusedObject = mediaEnvelopeFocusedObject(
+          stationIndex,
+          typeof context.focusedAssetName === "string"
+            ? context.focusedAssetName
+            : ""
+        );
+        const viewportSideOffset =
+          focusedObject?.local.x < 0 ? 18 : -18;
         const programId = "__default-oversphere-video__";
         const program: MediaEnvelopeProgram = {
           id: programId,
           envelope: {
             shape: "sphere",
             origin: { mode: "focused-object" },
+            radius: defaultOversphereRadius,
             growth: {
               mode: "timed",
               durationMs: 1200,
@@ -5066,18 +5095,7 @@ const runtimeConfig = {
             orientation: { mode: "upright-to-world" },
             depthMode: "foreground"
           },
-          protectedRegions: [
-            {
-              target: "current-main-panel",
-              mode: "avoid",
-              angularRadiusDeg: 18
-            },
-            {
-              target: "next-main-panel",
-              mode: "avoid",
-              angularRadiusDeg: 18
-            }
-          ],
+          protectedRegions: [],
           layout: {
             mode: "hero",
             rows: 1,
@@ -5087,7 +5105,7 @@ const runtimeConfig = {
             gapDeg: 0,
             tileAngularWidthDeg: 56,
             tileAngularHeightDeg: 34,
-            azimuthOffsetDeg: 18,
+            azimuthOffsetDeg: viewportSideOffset,
             elevationOffsetDeg: 4
           },
           media: selected
@@ -5095,11 +5113,18 @@ const runtimeConfig = {
                 id: selected.id,
                 type: "video",
                 src: selected.url,
-                loop: true,
+                loop: false,
                 muted: true,
                 opacity: 1
               }]
-            : []
+            : [],
+          lifecycle: {
+            endOnMediaEnd: true
+          },
+          performance: {
+            cullOutsideEnvelope: true,
+            restoreOutsideAfterMs: 180
+          }
         };
         mediaEnvelopePrograms.set(programId, program);
         return activateMediaEnvelopeInternal(
@@ -5187,14 +5212,12 @@ const runtimeConfig = {
         const tileHeight = Math.max(4, Number(layout.tileAngularHeightDeg ?? Math.max(5, cellHeight - gap)));
 
         const camera = cameraPosition();
-        // Surface coordinates are measured outward from the envelope origin.
-        // To place media on the side facing the viewer, point FROM the origin
-        // TO the camera. The previous camera->origin vector placed the tile on
-        // the far side of the sphere.
-        const cameraFacing =
-          mediaEnvelopeDirection(origin, camera) ??
-          ({ x: 0, y: 0, z: 1 } as Vec3);
-        const baseCenterAngles = mediaEnvelopeAngles(cameraFacing);
+        // The focus camera is inside the temporary oversphere. Put the media
+        // on the far inner wall along the view ray: camera -> focus -> sphere.
+        const innerViewWallDirection =
+          mediaEnvelopeDirection(camera, origin) ??
+          ({ x: 0, y: 0, z: -1 } as Vec3);
+        const baseCenterAngles = mediaEnvelopeAngles(innerViewWallDirection);
         const centerAngles = {
           azimuthDeg:
             baseCenterAngles.azimuthDeg + Number(layout.azimuthOffsetDeg ?? 0),
@@ -5288,6 +5311,28 @@ const runtimeConfig = {
           cueActivatedAt: new Map(),
           activeCueLabels: new Set()
         };
+
+        const activatedEnvelope = activeMediaEnvelope;
+        if (program.lifecycle?.endOnMediaEnd) {
+          for (const tile of tiles) {
+            if (!tile.video || tile.video.loop) continue;
+            tile.video.addEventListener("ended", () => {
+              if (activeMediaEnvelope !== activatedEnvelope) return;
+              mediaEnvelopeOutsideRestoreAt =
+                performance.now() +
+                Math.max(0, Number(program.performance?.restoreOutsideAfterMs ?? 0));
+              disposeActiveMediaEnvelope();
+              window.dispatchEvent(new CustomEvent("webrev:media-envelope-media-ended", {
+                detail: {
+                  programId: program.id,
+                  mediaId: tile.mediaId,
+                  restoreOutsideAfterMs:
+                    Math.max(0, Number(program.performance?.restoreOutsideAfterMs ?? 0))
+                }
+              }));
+            }, { once: true });
+          }
+        }
 
         window.dispatchEvent(new CustomEvent("webrev:media-envelope-activated", {
           detail: mediaEnvelopeDebugState()
@@ -5556,6 +5601,20 @@ const runtimeConfig = {
             detail: { ...oversphereVideoSelectionPolicy }
           }));
           return { ...oversphereVideoSelectionPolicy };
+        },
+        getOversphereRadius() {
+          return defaultOversphereRadius;
+        },
+        setOversphereRadius(radius: number) {
+          const next = Number(radius);
+          if (!Number.isFinite(next) || next <= 0) {
+            throw new Error("Oversphere radius must be a positive number.");
+          }
+          defaultOversphereRadius = Math.max(2, next);
+          window.dispatchEvent(new CustomEvent("webrev:oversphere-radius", {
+            detail: { radius: defaultOversphereRadius }
+          }));
+          return defaultOversphereRadius;
         },
         getOversphereVideoHistory() {
           return {
@@ -6480,7 +6539,21 @@ const runtimeConfig = {
         return { showGlbs: false, maxGlbs: 0, representation: "glb" };
       }
 
+      function shouldCullStationForMediaEnvelope(index: number, now: number) {
+        if (index === arrivingAt) return false;
+
+        const active = activeMediaEnvelope;
+        if (active?.program.performance?.cullOutsideEnvelope) {
+          const center = stationCenter(index);
+          return mediaEnvelopeDistance(active.origin, center) > active.radius;
+        }
+
+        return now < mediaEnvelopeOutsideRestoreAt;
+      }
+
       function drawStation(index: number, now: number) {
+        if (shouldCullStationForMediaEnvelope(index, now)) return;
+
         const station = stations[index];
         const center = stationCenter(index);
         const cp = project(center);
@@ -7210,7 +7283,7 @@ const runtimeConfig = {
         const activeTrack = trackCatalog().find(
           (candidate: { name: string; url: string }) => candidate.url === url
         );
-        if (activeTrack) {
+        if (activeTrack && focusExperience?.settled) {
           activateMediaEnvelopeForTrigger(
             { type: "song", trackId: activeTrack.name },
             {
@@ -7465,6 +7538,21 @@ const runtimeConfig = {
           if (!focusExperience.settled && now - focusExperience.startedAt >= 1450) {
             focusExperience.settled = true;
             fadeInFocusAudio();
+
+            const activeTrack = trackCatalog().find(
+              (candidate: { name: string; url: string }) =>
+                candidate.url === focusAudioSourceUrl
+            );
+            if (activeTrack) {
+              activateMediaEnvelopeForTrigger(
+                { type: "song", trackId: activeTrack.name },
+                {
+                  stationIndex: arrivingAt,
+                  focusedAssetName: focusExperience.object.name
+                }
+              );
+            }
+
             window.dispatchEvent(new CustomEvent("webrev:focus-experience-settled", {
               detail: {
                 stationId: activeStationId,
