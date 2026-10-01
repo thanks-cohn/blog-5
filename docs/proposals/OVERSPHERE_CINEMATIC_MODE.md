@@ -305,6 +305,84 @@ The cinematic source therefore does **not** need a song pairing to have audio.
 
 ---
 
+## Intermission location policy
+
+If Cinematic Mode keeps the ordinary playlist running underneath the movie, it may also expose a location choice for intermissions.
+
+The intended audience-facing choice is conceptually:
+
+```text
+Stay at Location
+Change Location During Intermission
+```
+
+This should be an explicit cinematic policy rather than an automatic side effect of playlist advancement.
+
+A useful API shape is:
+
+```ts
+type CinematicIntermissionLocationPolicy =
+  | {
+      mode: "stay";
+    }
+  | {
+      mode: "change-during-intermission";
+      travelMode?: "inherit" | "teleport" | "roller-coaster" | "custom";
+      customTravelId?: string;
+    };
+```
+
+Behavior:
+
+- `stay` keeps the current plane/location fixed for the entire cinematic session;
+- `change-during-intermission` allows location travel only while the movie is in an intermission state;
+- the movie itself must not continue visually while the travel transition is happening unless explicitly authored;
+- once travel finishes, the cinematic surface is re-resolved for the new location and the movie resumes from the same playback position or the next authored chapter/intermission boundary;
+- the underlying playlist may continue advancing during the intermission when its audio policy allows it;
+- location travel must never be triggered merely because a background song ended while the movie is actively playing.
+
+This preserves the distinction between:
+
+```text
+movie playback clock
+playlist/music clock
+world/location journey clock
+```
+
+They may interact, but none should silently control the others.
+
+Suggested runtime methods:
+
+```ts
+api.getCinematicIntermissionLocationPolicy()
+api.setCinematicIntermissionLocationPolicy(policy)
+
+api.beginCinematicIntermission()
+api.endCinematicIntermission()
+```
+
+A future authored intermission could also define:
+
+```ts
+{
+  atSeconds: 3600,
+  durationSeconds: 600,
+  allowLocationChange: true
+}
+```
+
+or chapter-based boundaries.
+
+The default should remain conservative:
+
+```ts
+{ mode: "stay" }
+```
+
+so entering Cinematic Mode never unexpectedly moves the audience.
+
+---
+
 ## Long-form playback lifecycle
 
 Cinematic playback should expose a richer lifecycle than ordinary looping oversphere videos:
