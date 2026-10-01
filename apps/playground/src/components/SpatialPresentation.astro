@@ -5464,7 +5464,7 @@ const runtimeConfig = {
         if (!action) return;
         if (action.type === "station") {
           const index = stations.findIndex((station: any) => station.id === action.stationId);
-          if (index >= 0) requestStation(index, false, "teleport");
+          if (index >= 0) requestStation(index, false, projectPlaneTravelMode);
           return;
         }
         if (action.type === "link") {
@@ -5956,10 +5956,7 @@ const runtimeConfig = {
           requestStation(
             nextStationIndex,
             false,
-            focusPlaybackProgram.travelMode === "teleport" ||
-              focusPlaybackProgram.travelMode === "custom"
-              ? focusPlaybackProgram.travelMode
-              : "roller-coaster",
+            projectPlaneTravelMode,
             focusPlaybackProgram.customTravelId ?? ""
           );
           return;
@@ -5969,10 +5966,7 @@ const runtimeConfig = {
         requestStation(
           nextStationIndex,
           true,
-          focusPlaybackProgram.travelMode === "teleport" ||
-            focusPlaybackProgram.travelMode === "custom"
-            ? focusPlaybackProgram.travelMode
-            : "roller-coaster",
+          projectPlaneTravelMode,
           focusPlaybackProgram.customTravelId ?? ""
         );
       }
@@ -6540,10 +6534,7 @@ const runtimeConfig = {
           requestStation(
             entry.stationIndex,
             true,
-            focusPlaybackProgram.travelMode === "teleport" ||
-              focusPlaybackProgram.travelMode === "custom"
-              ? focusPlaybackProgram.travelMode
-              : "roller-coaster",
+            projectPlaneTravelMode,
             focusPlaybackProgram.customTravelId ?? ""
           );
           presentationSettings.focusAudio.scope =
