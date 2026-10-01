@@ -108,7 +108,16 @@
     },
     "textPlane": {
       "enabled": true,
-      "color": "#f3b6c8"
+      "color": "#ff2bd6",
+      "textColor": "#f7ff00",
+      "fontFamily": "Rock Salt",
+      "fontImportUrl": "https://fonts.googleapis.com/css2?family=Rock+Salt&display=swap"
+    },
+    "background": {
+      "mode": "starfield",
+      "color": "#000000",
+      "stars": true,
+      "shootingStars": true
     }
   },
   "stations": [
@@ -118,8 +127,8 @@
       "label": "First Light",
       "theme": "amber",
       "text": {
-        "title": "Make the space yours.",
-        "body": "Replace the portrait, surround it with your own objects, and let the ride carry people into the arrangement."
+        "title": "",
+        "body": "I will always love you. I don't want to live without you."
       },
       "reveal": {
         "mode": "timer",
@@ -141,8 +150,8 @@
       "label": "Blue Room",
       "theme": "blue",
       "text": {
-        "title": "The route is part of the design.",
-        "body": "The camera rides the visible thread. Later, any face of the six-sided prism can become the route."
+        "title": "",
+        "body": "There was never a you and I. There was only ever us."
       },
       "reveal": {
         "mode": "click",
@@ -163,8 +172,8 @@
       "label": "Rose Archive",
       "theme": "rose",
       "text": {
-        "title": "Start with a format. End somewhere personal.",
-        "body": "Change the picture, the paper, the route, the speed, the surrounding objects, or the entire arrangement."
+        "title": "",
+        "body": "Please let me stay inside the heart of your wish. Our Past. My Own."
       },
       "reveal": {
         "mode": "timer",
