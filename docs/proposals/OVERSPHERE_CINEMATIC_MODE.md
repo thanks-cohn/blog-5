@@ -217,6 +217,94 @@ The host must still supply browser-compatible playback behavior such as correct 
 
 ---
 
+## Cinematic audio policy
+
+Cinematic Mode should treat **the video's own audio as a first-class soundtrack source**.
+
+The default movie-night behavior should be:
+
+- video audio enabled;
+- ordinary music-player playback paused or muted while the cinematic source is active;
+- the prior music-player state remembered so it can resume cleanly when Cinematic Mode exits.
+
+However, Cinematic Mode should also support a deliberate layered-audio option for more experimental presentations.
+
+A creator may choose to keep the ordinary music playlist running underneath the video at a reduced volume while the movie audio remains primary.
+
+Illustrative policy:
+
+```ts
+type CinematicAudioPolicy =
+  | {
+      mode: "video-only";
+      videoVolume?: number;
+      suspendMusicPlayer?: true;
+    }
+  | {
+      mode: "video-with-background-music";
+      videoVolume?: number;
+      musicVolume?: number;
+      keepPlaylistAdvancing?: boolean;
+    }
+  | {
+      mode: "music-only";
+      videoMuted?: true;
+      musicVolume?: number;
+    };
+```
+
+The normal default should be equivalent to:
+
+```ts
+{
+  mode: "video-only",
+  videoVolume: 1,
+  suspendMusicPlayer: true
+}
+```
+
+A more playful presentation could instead request:
+
+```ts
+{
+  mode: "video-with-background-music",
+  videoVolume: 1,
+  musicVolume: 0.15,
+  keepPlaylistAdvancing: true
+}
+```
+
+This allows the existing playlist to continue in the same presentation context at low volume without requiring the cinematic video to be paired to a song.
+
+The audio sources must remain independently controllable. Cinematic Mode should not merge them into one hidden gain value.
+
+Recommended runtime controls:
+
+```ts
+api.setCinematicAudioPolicy(policy)
+api.getCinematicAudioPolicy()
+
+api.setCinematicVideoVolume(volume)
+api.setCinematicBackgroundMusicVolume(volume)
+```
+
+When Cinematic Mode exits, the runtime should restore the prior music-player state and volume unless the caller explicitly requests otherwise.
+
+This distinction is important:
+
+```text
+cinematic video
+  ├─ visual source
+  └─ primary movie audio
+
+ordinary music player
+  └─ optional independent background layer
+```
+
+The cinematic source therefore does **not** need a song pairing to have audio.
+
+---
+
 ## Long-form playback lifecycle
 
 Cinematic playback should expose a richer lifecycle than ordinary looping oversphere videos:
