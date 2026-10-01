@@ -5258,14 +5258,6 @@ const runtimeConfig = {
           )
         );
         const selected = selectDefaultOversphereVideo(stationIndex);
-        const focusedObject = mediaEnvelopeFocusedObject(
-          stationIndex,
-          typeof context.focusedAssetName === "string"
-            ? context.focusedAssetName
-            : ""
-        );
-        const viewportSideOffset =
-          focusedObject?.local.x < 0 ? 18 : -18;
         const programId = "__default-oversphere-video__";
         const program: MediaEnvelopeProgram = {
           id: programId,
@@ -5292,16 +5284,13 @@ const runtimeConfig = {
           },
           protectedRegions: [],
           layout: {
-            mode: "hero",
+            mode: "viewport-fit",
             rows: 1,
             columns: 1,
-            horizontalArcDeg: 64,
-            verticalArcDeg: 40,
-            gapDeg: 0,
-            tileAngularWidthDeg: 56,
-            tileAngularHeightDeg: 34,
-            azimuthOffsetDeg: viewportSideOffset,
-            elevationOffsetDeg: 4
+            viewportWidth: 0.62,
+            viewportHeight: 0.46,
+            viewportOffsetX: 0,
+            viewportOffsetY: 0.02
           },
           media: selected
             ? [{
@@ -5385,7 +5374,7 @@ const runtimeConfig = {
             ? context.focusedAssetName
             : focusExperience?.object.name ?? "";
         const origin = resolveMediaEnvelopeOrigin(program, stationIndex, focusedAssetName);
-        const radius = resolveMediaEnvelopeRadius(program, stationIndex, origin);
+        let radius = resolveMediaEnvelopeRadius(program, stationIndex, origin);
 
         const T3: any = THREE;
         const group = new T3.Group();
@@ -5421,25 +5410,30 @@ const runtimeConfig = {
         };
         const protectedDirections = mediaEnvelopeProtectedDirections(program, stationIndex, origin);
         const candidates: Array<{ azimuthDeg: number; elevationDeg: number }> = [];
+        const viewportFit = layout.mode === "viewport-fit";
 
-        for (let row = 0; row < rows; row++) {
-          for (let column = 0; column < columns; column++) {
-            const azimuthDeg =
-              centerAngles.azimuthDeg -
-              horizontalArc / 2 +
-              cellWidth * (column + 0.5);
-            const elevationDeg =
-              centerAngles.elevationDeg +
-              verticalArc / 2 -
-              cellHeight * (row + 0.5);
-            if (elevationDeg <= -86 || elevationDeg >= 86) continue;
-            const direction = mediaEnvelopeUnitFromAngles(azimuthDeg, elevationDeg);
-            const blocked = protectedDirections.some(
-              (protectedRegion) =>
-                mediaEnvelopeAngularDistanceDeg(direction, protectedRegion.direction) <
-                protectedRegion.radiusDeg
-            );
-            if (!blocked) candidates.push({ azimuthDeg, elevationDeg });
+        if (viewportFit) {
+          candidates.push({ ...centerAngles });
+        } else {
+          for (let row = 0; row < rows; row++) {
+            for (let column = 0; column < columns; column++) {
+              const azimuthDeg =
+                centerAngles.azimuthDeg -
+                horizontalArc / 2 +
+                cellWidth * (column + 0.5);
+              const elevationDeg =
+                centerAngles.elevationDeg +
+                verticalArc / 2 -
+                cellHeight * (row + 0.5);
+              if (elevationDeg <= -86 || elevationDeg >= 86) continue;
+              const direction = mediaEnvelopeUnitFromAngles(azimuthDeg, elevationDeg);
+              const blocked = protectedDirections.some(
+                (protectedRegion) =>
+                  mediaEnvelopeAngularDistanceDeg(direction, protectedRegion.direction) <
+                  protectedRegion.radiusDeg
+              );
+              if (!blocked) candidates.push({ azimuthDeg, elevationDeg });
+            }
           }
         }
 
@@ -5448,13 +5442,26 @@ const runtimeConfig = {
           const source = media[index];
           const coordinate = candidates[index];
           if (!source?.id || !source?.src) continue;
-          const patch = createMediaEnvelopePatchGeometry(
-            radius,
-            coordinate.azimuthDeg,
-            coordinate.elevationDeg,
-            tileWidth,
-            tileHeight
-          );
+          const patch = viewportFit
+            ? createMediaEnvelopeViewportPatchGeometry(
+                radius,
+                origin,
+                camera,
+                Math.max(0.12, Math.min(0.92, Number(layout.viewportWidth ?? 0.62))),
+                Math.max(0.12, Math.min(0.92, Number(layout.viewportHeight ?? 0.46))),
+                Math.max(-0.8, Math.min(0.8, Number(layout.viewportOffsetX ?? 0))),
+                Math.max(-0.8, Math.min(0.8, Number(layout.viewportOffsetY ?? 0)))
+              )
+            : createMediaEnvelopePatchGeometry(
+                radius,
+                coordinate.azimuthDeg,
+                coordinate.elevationDeg,
+                tileWidth,
+                tileHeight
+              );
+          if ("resolvedRadius" in patch) {
+            radius = Math.max(radius, Number(patch.resolvedRadius) || radius);
+          }
           const created = createMediaEnvelopeTexture(source);
           const baseOpacity = Math.max(0, Math.min(1, Number(source.opacity ?? 1)));
           const foreground = program.surface?.depthMode === "foreground";
@@ -5481,6 +5488,8 @@ const runtimeConfig = {
             material,
             texture: created.texture,
             video: created.video,
+            sourceUrl: created.sourceUrl,
+            videoState: created.videoState,
             baseOpacity,
             scale: 1,
             opacity: baseOpacity,
