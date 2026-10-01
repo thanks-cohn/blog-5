@@ -375,6 +375,105 @@ api.setUnpairedGlbLimit("all")
 
 ---
 
+# 6A. Randomized GLB Diversity
+
+Randomized extra GLBs now use a history-aware diversity policy across the complete ordered set of planes.
+
+The default behavior is:
+
+- prefer GLBs that have not appeared on any earlier plane in the current full run
+- avoid repeating a randomized GLB on two adjacent planes whenever enough alternatives exist
+- if the global GLB inventory is too small to satisfy full uniqueness, reuse is allowed gracefully
+- when reuse is necessary, recent-plane probability multipliers reduce the chance of recently seen objects
+
+Default policy:
+
+```ts
+{
+  avoidWithinRun: true,
+  avoidAdjacent: true,
+  recentPlaneMultipliers: {
+    1: 0.5,
+    2: 0.8
+  }
+}
+```
+
+The multipliers mean:
+
+- an object used on the immediately previous plane receives a 0.5× selection weight when reuse is necessary
+- an object used two planes ago receives a 0.8× selection weight
+- objects outside configured history distances keep their normal weight
+
+Hard uniqueness is attempted before these soft weighting rules are needed.
+
+## `getRandomGlbDiversityPolicy()`
+
+Returns the active diversity policy.
+
+## `setRandomGlbDiversityPolicy(policy)`
+
+Changes one or more diversity rules.
+
+Example:
+
+```ts
+api.setRandomGlbDiversityPolicy({
+  avoidWithinRun: true,
+  avoidAdjacent: true,
+  recentPlaneMultipliers: {
+    1: 0.25,
+    2: 0.6,
+    3: 0.85
+  }
+})
+```
+
+This allows future authoring styles such as very strong recent-object suppression or a longer gradual decay curve.
+
+## `getRandomGlbSelectionHistory()`
+
+Returns the randomized GLB names chosen for each plane in the current generated run.
+
+Shape:
+
+```ts
+string[][]
+```
+
+Example:
+
+```ts
+[
+  ["a.glb", "b.glb", "c.glb"],
+  ["d.glb", "e.glb", "f.glb"],
+  ["g.glb", "h.glb", "i.glb"]
+]
+```
+
+This is primarily useful for diagnostics, authoring tools, manifests, and future visualization of diversity decisions.
+
+## `clearRandomGlbSelectionHistory()`
+
+Clears the current randomized-selection history.
+
+The next full layout generation rebuilds history from its new selections.
+
+## Selection priority
+
+For each plane, randomized GLBs are selected approximately in this order:
+
+```
+never used earlier in this world run
+→ not used on previous plane
+→ weighted reuse by recent-plane distance
+→ graceful reuse if inventory is insufficient
+```
+
+This system is independent of fixed/paired GLBs. Authored GLB placements remain authored placements; the diversity policy governs the additional randomized GLB pool.
+
+---
+
 # 7. Track History and Variety
 
 The engine now keeps two distinct history concepts.
@@ -386,7 +485,7 @@ A short ordered window used to avoid immediate repetition.
 Default:
 
 ```
-2 tracks
+4 tracks
 ```
 
 ## Session played ledger
@@ -878,7 +977,7 @@ Lists available editor-camera presets.
 As of the current implementation:
 
 - extra unpaired GLBs: randomized 3–5
-- recent-song avoidance window: 2
+- recent-song avoidance window: 4
 - current-plane fallback-song avoidance: enabled
 - unpaired resolution: prefer never-heard tracks first
 - normal journey length: number of visible GLBs
