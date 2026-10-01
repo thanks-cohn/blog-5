@@ -702,6 +702,7 @@ const runtimeConfig = {
         setOversphereRadius(radius: number): number;
         enterOversphereInspectMode(): boolean;
         exitOversphereInspectMode(): boolean;
+        getOversphereMediaTrace(): MediaEnvelopeRuntimeState;
         getOversphereInspectState(): {
           active: boolean;
           pointerLocked: boolean;
@@ -5008,7 +5009,19 @@ const runtimeConfig = {
         return result;
       }
 
-      function createMediaEnvelopeTexture(source: MediaEnvelopeMediaSource) {
+      function createMediaEnvelopeTexture(
+        source: MediaEnvelopeMediaSource
+      ): {
+        texture: any;
+        video?: HTMLVideoElement;
+        videoState?: {
+          phase: string;
+          lastEventAt: number;
+          playError?: string;
+          mediaErrorCode?: number;
+        };
+        sourceUrl: string;
+      } {
         const T3: any = THREE;
         const src = mediaEnvelopeSourceUrl(source.src);
         if (source.type === "video") {
@@ -5318,6 +5331,52 @@ const runtimeConfig = {
         );
       }
 
+      function mediaEnvelopeTileViewportTrace(tile: ActiveMediaEnvelopeTile) {
+        const result: Record<string, unknown> = {
+          sourceUrl: tile.sourceUrl ?? null
+        };
+
+        if (tile.video) {
+          result.video = {
+            phase: tile.videoState?.phase ?? "unknown",
+            lastEventAt: tile.videoState?.lastEventAt ?? null,
+            playError: tile.videoState?.playError ?? null,
+            mediaErrorCode: tile.video.error?.code ?? tile.videoState?.mediaErrorCode ?? null,
+            readyState: tile.video.readyState,
+            networkState: tile.video.networkState,
+            paused: tile.video.paused,
+            ended: tile.video.ended,
+            currentTime: tile.video.currentTime,
+            duration: Number.isFinite(tile.video.duration) ? tile.video.duration : null,
+            videoWidth: tile.video.videoWidth,
+            videoHeight: tile.video.videoHeight,
+            currentSrc: tile.video.currentSrc || tile.video.src || null
+          };
+        }
+
+        if (threeCamera && tile.mesh) {
+          try {
+            const T3: any = THREE;
+            threeCamera.updateMatrixWorld?.();
+            tile.mesh.updateWorldMatrix?.(true, false);
+            const world = new T3.Vector3();
+            tile.mesh.getWorldPosition(world);
+            const ndc = world.clone().project(threeCamera);
+            result.worldCenter = { x: world.x, y: world.y, z: world.z };
+            result.ndcCenter = { x: ndc.x, y: ndc.y, z: ndc.z };
+            result.centerInViewport =
+              ndc.z >= -1 && ndc.z <= 1 &&
+              Math.abs(ndc.x) <= 1 &&
+              Math.abs(ndc.y) <= 1;
+          } catch (error) {
+            result.viewportTraceError =
+              error instanceof Error ? error.message : String(error);
+          }
+        }
+
+        return result;
+      }
+
       function mediaEnvelopeDebugState(): MediaEnvelopeRuntimeState {
         const active = activeMediaEnvelope;
         if (!active) return { active: false };
@@ -5341,7 +5400,8 @@ const runtimeConfig = {
             surfaceCoordinate: { ...tile.surfaceCoordinate },
             scale: tile.scale,
             opacity: tile.opacity,
-            hero: tile.hero
+            hero: tile.hero,
+            trace: mediaEnvelopeTileViewportTrace(tile)
           })),
           activeCues: [...active.activeCueLabels]
         };
@@ -5825,6 +5885,9 @@ const runtimeConfig = {
         },
         exitOversphereInspectMode() {
           return exitOversphereInspectMode();
+        },
+        getOversphereMediaTrace() {
+          return mediaEnvelopeDebugState();
         },
         getOversphereInspectState() {
           return {
