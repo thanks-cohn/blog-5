@@ -966,6 +966,51 @@ The current v1 renderer:
 
 Discovered image/video assets under `apps/playground/src/assets/**` are available by file name/path through the generic media catalog. The current shared test-video pool is reserved at `apps/playground/src/assets/oversphere/videos/`.
 
+### Default oversphere video selection
+
+When a song starts and no explicit media-envelope binding matches it, the runtime now falls back to the shared `oversphere/videos` pool automatically.
+
+Default behavior:
+
+- one video is selected for the focused item/song
+- that video loops for the duration of that focus/song
+- no object-to-video pairing is required
+- the selector avoids the last **2** videos globally
+- when enough candidates remain, it also avoids every video used on the **previous plane**
+- if the pool is too small to satisfy an exclusion, that exclusion is relaxed rather than producing no media
+- with exactly 3 videos, the last-two rule naturally forces rotation through all three
+- with a larger pool, selection is random among eligible candidates
+- explicit authored `MediaEnvelopeBinding` entries take precedence over this fallback
+
+The policy is intentionally exposed instead of hard-coded:
+
+```js
+api.getOversphereVideoSelectionPolicy()
+
+api.setOversphereVideoSelectionPolicy({
+  avoidRecent: 2,
+  avoidPreviousPlane: true,
+  pairingRequired: false
+})
+
+api.getOversphereVideoHistory()
+api.clearOversphereVideoHistory()
+```
+
+The current policy type is:
+
+```ts
+type OversphereVideoSelectionPolicy = {
+  avoidRecent: number;
+  avoidPreviousPlane: boolean;
+  pairingRequired: boolean;
+  selection: "random";
+};
+```
+
+This is a project-default policy built on the generic media-envelope API. Future authored per-song/per-object pools can replace it without changing the renderer.
+
+
 ### Minimal example
 
 ```js
