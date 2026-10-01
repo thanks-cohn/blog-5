@@ -47,6 +47,21 @@ const discoveredEnvelopeMedia = import.meta.glob("../assets/**/*.{mp4,webm,gif,p
   import: "default"
 }) as Record<string, string>;
 
+const discoveredOversphereVideos = import.meta.glob("../assets/oversphere/videos/*.{mp4,webm}", {
+  eager: true,
+  query: "?url",
+  import: "default"
+}) as Record<string, string>;
+
+const oversphereVideos = Object.entries(discoveredOversphereVideos)
+  .map(([path, url]) => ({
+    id: path.split("/").pop() ?? path,
+    name: path.split("/").pop() ?? path,
+    path,
+    url
+  }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
 const mediaEnvelopeMedia = Object.entries(discoveredEnvelopeMedia)
   .map(([path, url]) => ({
     id: path.split("/").pop() ?? path,
@@ -95,6 +110,7 @@ const runtimeConfig = {
   centerImagesByArtwork,
   musicTracks,
   mediaEnvelopeMedia,
+  oversphereVideos,
   resolvedLinks: links
 };
 ---
