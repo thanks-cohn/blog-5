@@ -4881,6 +4881,105 @@ const runtimeConfig = {
         return { geometry, centerOffset };
       }
 
+      function createMediaEnvelopeViewportPatchGeometry(
+        radius: number,
+        origin: Vec3,
+        camera: Vec3,
+        widthFraction: number,
+        heightFraction: number,
+        offsetX: number,
+        offsetY: number
+      ) {
+        const T3: any = THREE;
+        const segmentsX = 16;
+        const segmentsY = 10;
+        const basis = screenBasis(origin, camera);
+        const fovRadians = Math.max(1, Number(threeCamera?.fov ?? 60)) * Math.PI / 180;
+        const tanHalfFov = Math.tan(fovRadians * 0.5);
+        const aspect = Math.max(0.1, Number(threeCamera?.aspect ?? (width / Math.max(1, height))));
+        const cameraFromOrigin = {
+          x: camera.x - origin.x,
+          y: camera.y - origin.y,
+          z: camera.z - origin.z
+        };
+        const cameraDistance = Math.hypot(
+          cameraFromOrigin.x,
+          cameraFromOrigin.y,
+          cameraFromOrigin.z
+        );
+        const resolvedRadius = Math.max(radius, cameraDistance + 0.75);
+
+        const rayToSphere = (ndcX: number, ndcY: number) => {
+          const dx =
+            basis.forward.x +
+            basis.right.x * ndcX * tanHalfFov * aspect +
+            basis.up.x * ndcY * tanHalfFov;
+          const dy =
+            basis.forward.y +
+            basis.right.y * ndcX * tanHalfFov * aspect +
+            basis.up.y * ndcY * tanHalfFov;
+          const dz =
+            basis.forward.z +
+            basis.right.z * ndcX * tanHalfFov * aspect +
+            basis.up.z * ndcY * tanHalfFov;
+          const length = Math.max(0.000001, Math.hypot(dx, dy, dz));
+          const direction = { x: dx / length, y: dy / length, z: dz / length };
+
+          const ox = camera.x - origin.x;
+          const oy = camera.y - origin.y;
+          const oz = camera.z - origin.z;
+          const b = 2 * (ox * direction.x + oy * direction.y + oz * direction.z);
+          const cc = ox * ox + oy * oy + oz * oz - resolvedRadius * resolvedRadius;
+          const discriminant = Math.max(0, b * b - 4 * cc);
+          const t = (-b + Math.sqrt(discriminant)) * 0.5;
+          return {
+            x: camera.x + direction.x * t - origin.x,
+            y: camera.y + direction.y * t - origin.y,
+            z: camera.z + direction.z * t - origin.z
+          };
+        };
+
+        const halfWidth = Math.max(0.12, Math.min(0.92, widthFraction));
+        const halfHeight = Math.max(0.12, Math.min(0.92, heightFraction));
+        const centerOffset = rayToSphere(offsetX, offsetY);
+        const positions: number[] = [];
+        const uvs: number[] = [];
+        const indices: number[] = [];
+
+        for (let y = 0; y <= segmentsY; y++) {
+          const v = y / segmentsY;
+          const ndcY = offsetY + (0.5 - v) * 2 * halfHeight;
+          for (let x = 0; x <= segmentsX; x++) {
+            const u = x / segmentsX;
+            const ndcX = offsetX + (u - 0.5) * 2 * halfWidth;
+            const point = rayToSphere(ndcX, ndcY);
+            positions.push(
+              point.x - centerOffset.x,
+              point.y - centerOffset.y,
+              point.z - centerOffset.z
+            );
+            uvs.push(u, 1 - v);
+          }
+        }
+
+        for (let y = 0; y < segmentsY; y++) {
+          for (let x = 0; x < segmentsX; x++) {
+            const a = y * (segmentsX + 1) + x;
+            const b = a + 1;
+            const d = (y + 1) * (segmentsX + 1) + x;
+            const e = d + 1;
+            indices.push(a, d, b, b, d, e);
+          }
+        }
+
+        const geometry = new T3.BufferGeometry();
+        geometry.setAttribute("position", new T3.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute("uv", new T3.Float32BufferAttribute(uvs, 2));
+        geometry.setIndex(indices);
+        geometry.computeVertexNormals();
+        return { geometry, centerOffset, resolvedRadius };
+      }
+
       function mediaEnvelopeProtectedDirections(
         program: MediaEnvelopeProgram,
         stationIndex: number,
