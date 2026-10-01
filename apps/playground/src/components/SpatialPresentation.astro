@@ -7145,22 +7145,10 @@ const runtimeConfig = {
         if (direction > 0) {
           if (journeyCursor >= journeyEntries.length - 1) {
             journeyPlaneCyclesCompleted += 1;
-
-            // Manual left/right navigation is plane-locked until every
-            // eligible object on this plane has actually been focused at
-            // least once. Merely reaching/wrapping the numeric cursor is not
-            // sufficient proof that the visitor completed the plane.
-            if (!currentPlaneObjectCoverageComplete() || shouldRemainOnCurrentPlane()) {
-              journeyCursor = 0;
-              const first = journeyEntries[0];
-              if (first) playJourneyEntry(first);
-              return;
-            }
-
-            continueJourneyToNextPlane();
-            return;
+            journeyCursor = 0;
+          } else {
+            journeyCursor += 1;
           }
-          journeyCursor += 1;
         } else {
           journeyCursor =
             journeyCursor <= 0
@@ -8118,24 +8106,51 @@ const runtimeConfig = {
           }
           return;
         }
-        if (event.key === "ArrowRight") {
+
+        // Project navigation policy:
+        // Left/Right are exclusively for object iteration on the current plane.
+        // Up/Down are exclusively for plane travel. This removes the ambiguous
+        // behavior where ArrowRight could mean either "next object" or
+        // "next plane" depending on transient focus state.
+        if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
           event.preventDefault();
+          const direction: -1 | 1 = event.key === "ArrowRight" ? 1 : -1;
+
           if (focusExperience) {
-            stepFocusObject(1);
-          } else {
-            railRideDirection = 1;
-            requestStation(Math.min(stations.length - 1, arrivingAt + 1), false, "teleport");
+            stepFocusObject(direction);
+            return;
           }
+
+          const entries = planeJourneyEntries(arrivingAt);
+          const seed = direction > 0 ? entries[0] : entries[entries.length - 1];
+          if (seed) playJourneyEntry(seed);
+          return;
         }
-        if (event.key === "ArrowLeft") {
+
+        if (event.key === "ArrowUp") {
           event.preventDefault();
-          if (focusExperience) {
-            stepFocusObject(-1);
-          } else {
-            railRideDirection = -1;
-            requestStation(Math.max(0, arrivingAt - 1), false, "teleport");
-          }
+          if (focusExperience) endFocusExperience();
+          railRideDirection = 1;
+          requestStation(
+            Math.min(stations.length - 1, arrivingAt + 1),
+            false,
+            "teleport"
+          );
+          return;
         }
+
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          if (focusExperience) endFocusExperience();
+          railRideDirection = -1;
+          requestStation(
+            Math.max(0, arrivingAt - 1),
+            false,
+            "teleport"
+          );
+          return;
+        }
+
         if (event.key === "Home") requestStation(0, false, "teleport");
       });
 
