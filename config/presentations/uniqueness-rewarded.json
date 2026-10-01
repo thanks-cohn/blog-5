@@ -174,29 +174,6 @@
       "mainImage": {
         "displayAsFloatingObject": false
       }
-    },
-    {
-      "id": "fourth-plane",
-      "artworkName": "fourth-plane",
-      "label": "Fourth Plane",
-      "theme": "violet",
-      "text": {
-        "title": "Another plane, same system.",
-        "body": "This plane inherits the same global asset, music, journey, and presentation rules."
-      },
-      "reveal": {
-        "mode": "timer",
-        "delayMs": 1800
-      },
-      "assetDisplayMode": "assets-only",
-      "asset3d": {
-        "layer": "middle",
-        "hideBehindImage": true
-      },
-      "centerImage": "rose-archive-center.jpg",
-      "mainImage": {
-        "displayAsFloatingObject": false
-      }
     }
   ],
   "assetActions": {},
@@ -224,6 +201,19 @@
     },
     "first-light-3.glb": {
       "type": "free"
+    }
+  },
+  "projectJourney": {
+    "planeTravelMode": "roller-coaster",
+    "automaticDirection": "forward-only",
+    "stopAtFinalPlane": true,
+    "manualPlaneNavigation": "roller-coaster",
+    "expressReturn": {
+      "enabled": true,
+      "label": "Another Ride ♥?",
+      "travelMode": "roller-coaster",
+      "destinationStationId": "first-light",
+      "skipIntermediateStops": true
     }
   }
 }
