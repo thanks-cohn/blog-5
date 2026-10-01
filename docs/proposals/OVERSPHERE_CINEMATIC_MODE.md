@@ -583,6 +583,108 @@ Possible custom actions include:
 
 The core engine only needs the contract, ordering, cancellation, and debugging.
 
+### Intermission visual + playlist pairing
+
+An intermission may pair a **specific oversphere video/animation** with its own temporary playlist.
+
+This does not require the video and playlist to share one playback clock. By default, they simply occupy the same authored intermission window:
+
+```text
+intermission starts
+├─ play intermission video on oversphere
+└─ start intermission playlist
+      ↓
+both run during the same break
+      ↓
+intermission completion rule decides when to continue
+```
+
+Illustrative configuration:
+
+```ts
+{
+  id: "movie-night-break",
+  trigger: {
+    type: "after-songs",
+    count: 5
+  },
+
+  oversphere: {
+    mediaSrc: "/intermission/city-night.mp4",
+    mediaType: "video",
+    loop: true
+  },
+
+  playlist: {
+    tracks: [
+      "/music/intermission-01.mp3",
+      "/music/intermission-02.mp3",
+      "/music/intermission-03.mp3"
+    ],
+    order: "ordered",
+    loop: true,
+    volume: 0.35
+  },
+
+  completion: {
+    mode: "manual-or-duration",
+    durationSeconds: 600
+  }
+}
+```
+
+The engine should also allow a named playlist/pool instead of embedding track URLs:
+
+```ts
+playlist: {
+  playlistId: "movie-night-intermission",
+  order: "random",
+  loop: true,
+  volume: 0.25
+}
+```
+
+Possible playlist policies:
+
+```ts
+type CinematicIntermissionPlaylist = {
+  playlistId?: string;
+  tracks?: string[];
+  order?: "ordered" | "random";
+  loop?: boolean;
+  volume?: number;
+  startTrackId?: string;
+  keepAdvancing?: boolean;
+};
+```
+
+The intermission program may then choose how the break ends independently of either media stream:
+
+```ts
+type CinematicIntermissionCompletion =
+  | { mode: "video-ended" }
+  | { mode: "playlist-ended" }
+  | { mode: "duration"; durationSeconds: number }
+  | { mode: "manual" }
+  | { mode: "manual-or-duration"; durationSeconds: number }
+  | { mode: "custom"; resolverId: string; options?: Record<string, unknown> };
+```
+
+That separation is intentional.
+
+A looping intermission video can continue while several songs play. A short visual can finish while the playlist keeps going. A custom action can decide when the break is complete.
+
+Future tighter synchronization can be authored explicitly, for example:
+
+- advance the video chapter when a track changes;
+- start a particular song at a video cue;
+- crossfade the playlist when an animation reaches a marker;
+- trigger location travel after a selected track ends.
+
+Those are choreography rules layered on top of two independent media clocks rather than assumptions baked into the player.
+
+---
+
 ### Intermission execution model
 
 A future runtime should treat the intermission as a small deterministic program.
