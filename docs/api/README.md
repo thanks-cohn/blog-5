@@ -819,6 +819,15 @@ Programmatically moves to a plane.
 
 Default direct API travel is teleport-style unless another mode is supplied.
 
+For the current website's keyboard navigation, plane travel is intentionally bound as:
+
+```text
+ArrowUp   → next plane via roller-coaster travel
+ArrowDown → previous plane via roller-coaster travel
+```
+
+This is a project input policy layered over the generic travel API. Left/Right remain object iteration controls on the current plane.
+
 ---
 
 # 14. Journey Start
