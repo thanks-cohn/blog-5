@@ -373,7 +373,7 @@ const runtimeConfig = {
       paddingPx?: number;
     }>;
     layout?: {
-      mode?: "grid" | "hero" | "grid-with-hero";
+      mode?: "grid" | "hero" | "grid-with-hero" | "viewport-fit";
       rows?: number;
       columns?: number;
       horizontalArcDeg?: number;
@@ -383,6 +383,10 @@ const runtimeConfig = {
       tileAngularHeightDeg?: number;
       azimuthOffsetDeg?: number;
       elevationOffsetDeg?: number;
+      viewportWidth?: number;
+      viewportHeight?: number;
+      viewportOffsetX?: number;
+      viewportOffsetY?: number;
     };
     media?: MediaEnvelopeMediaSource[];
     choreography?: {
@@ -1307,6 +1311,13 @@ const runtimeConfig = {
       material: any;
       texture: any;
       video?: HTMLVideoElement;
+      sourceUrl?: string;
+      videoState?: {
+        phase: string;
+        lastEventAt: number;
+        playError?: string;
+        mediaErrorCode?: number;
+      };
       baseOpacity: number;
       scale: number;
       opacity: number;
