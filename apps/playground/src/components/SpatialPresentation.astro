@@ -94,6 +94,9 @@ const runtimeConfig = {
   <button type="button" id="rail-ride-next" class="rail-ride-next">
     Take the Roller Coaster
   </button>
+  <button type="button" id="another-ride" class="another-ride" hidden>
+    Another Ride ♥?
+  </button>
   <button type="button" id="focus-song-prev" class="focus-song-overlay focus-song-overlay-left" aria-label="Previous song and object">
     <span aria-hidden="true">‹</span>
   </button>
@@ -535,6 +538,7 @@ const runtimeConfig = {
   const canvas = document.getElementById("prism-rail-canvas");
   const glbCanvas = document.getElementById("glb-layer");
   const railRideNext = document.getElementById("rail-ride-next") as HTMLButtonElement | null;
+  const anotherRide = document.getElementById("another-ride") as HTMLButtonElement | null;
   const settingsToggle = document.getElementById("sphere-settings-toggle") as HTMLButtonElement | null;
   const settingsPanel = document.getElementById("sphere-settings-panel") as HTMLElement | null;
   const settingsClose = document.getElementById("sphere-settings-close") as HTMLButtonElement | null;
@@ -583,6 +587,7 @@ const runtimeConfig = {
   };
 
   let completedJourneyCount = 0;
+  let projectJourneyCompleted = false;
   let journeyMusicEvolution: JourneyMusicEvolutionPolicy = {
     presetJourneys: 2,
     presetSequence: [],
@@ -1048,6 +1053,13 @@ const runtimeConfig = {
   if (root && canvas instanceof HTMLCanvasElement) {
     const gameCanvas: HTMLCanvasElement = canvas;
     const config = JSON.parse(root.dataset.config ?? "{}");
+    const projectJourney = config.projectJourney ?? {};
+    const projectPlaneTravelMode: PlaneTravelMode =
+      projectJourney.planeTravelMode === "custom"
+        ? "custom"
+        : projectJourney.planeTravelMode === "teleport"
+          ? "teleport"
+          : "roller-coaster";
     const settingsStorageKey = "webrev:spatial-settings:v3";
     const legacySettingsStorageKey = "webrev:spatial-settings:v2";
     // v3 intentionally invalidates stale desktop visibility state from older builds.
@@ -5353,8 +5365,29 @@ const runtimeConfig = {
       }
 
       function updateRailRideControl() {
+        const atCompletedFinalPlane =
+          projectJourneyCompleted &&
+          arrivingAt === stations.length - 1;
+
+        if (anotherRide) {
+          const express = projectJourney.expressReturn ?? {};
+          anotherRide.textContent =
+            typeof express.label === "string" && express.label
+              ? express.label
+              : "Another Ride ♥?";
+          anotherRide.hidden =
+            !express.enabled ||
+            !atCompletedFinalPlane ||
+            !arrived() ||
+            presentationSettings.editor.mode !== "none";
+        }
+
         if (!railRideNext) return;
-        const canRide = arrived() && !focusExperience && presentationSettings.editor.mode === "none";
+        const canRide =
+          arrived() &&
+          !focusExperience &&
+          presentationSettings.editor.mode === "none" &&
+          !atCompletedFinalPlane;
         railRideNext.hidden = !canRide;
         if (!canRide) return;
         const nextIndex = arrivingAt + railRideDirection;
@@ -5838,6 +5871,8 @@ const runtimeConfig = {
       }
 
       function beginJourneyFromObject(obj: SceneObject) {
+        projectJourneyCompleted = false;
+        updateRailRideControl();
         const track = focusTrackForObject(obj);
         const entries = planeJourneyEntries(arrivingAt);
         journeyEntries = rotateJourneyEntries(
@@ -5863,6 +5898,25 @@ const runtimeConfig = {
       function continueJourneyToNextPlane() {
         if (!stations.length) return;
         const fromStationIndex = arrivingAt;
+
+        if (
+          projectJourney.stopAtFinalPlane === true &&
+          fromStationIndex === stations.length - 1
+        ) {
+          projectJourneyCompleted = true;
+          completedJourneyCount += 1;
+          window.dispatchEvent(new CustomEvent("webrev:journey-completed", {
+            detail: {
+              completedJourneyCount,
+              terminalStationId: stations[fromStationIndex]?.id ?? String(fromStationIndex),
+              stoppedAtFinalPlane: true
+            }
+          }));
+          status && (status.textContent = "Ride complete ♥");
+          updateRailRideControl();
+          return;
+        }
+
         const nextStationIndex = (arrivingAt + 1) % stations.length;
         const fromStationId = stations[fromStationIndex]?.id ?? String(fromStationIndex);
         const toStationId = stations[nextStationIndex]?.id ?? String(nextStationIndex);
@@ -5957,7 +6011,7 @@ const runtimeConfig = {
         if (direction > 0) {
           if (journeyCursor >= journeyEntries.length - 1) {
             journeyPlaneCyclesCompleted += 1;
-            if (shouldRemainOnCurrentPlane()) {
+            if (shouldRemainOnCurrentPlane() || projectJourneyCompleted) {
               journeyCursor = 0;
               const first = journeyEntries[0];
               if (first) playJourneyEntry(first);
@@ -6894,7 +6948,34 @@ const runtimeConfig = {
         if (arrivingAt >= stations.length - 1) railRideDirection = -1;
         else if (arrivingAt <= 0) railRideDirection = 1;
 
-        requestStation(arrivingAt + railRideDirection, false, "roller-coaster");
+        requestStation(
+          arrivingAt + railRideDirection,
+          false,
+          projectJourney.manualPlaneNavigation === "roller-coaster"
+            ? "roller-coaster"
+            : projectPlaneTravelMode
+        );
+      });
+
+      anotherRide?.addEventListener("click", () => {
+        if (!projectJourneyCompleted || !arrived() || focusExperience) return;
+        const destinationId =
+          projectJourney.expressReturn?.destinationStationId ?? stations[0]?.id;
+        const destinationIndex = Math.max(
+          0,
+          stations.findIndex((station: any) => station.id === destinationId)
+        );
+        projectJourneyCompleted = false;
+        railRideDirection = 1;
+        requestStation(
+          destinationIndex,
+          false,
+          projectJourney.expressReturn?.travelMode === "custom"
+            ? "custom"
+            : "roller-coaster"
+        );
+        status && (status.textContent = "Another ride ♥");
+        updateRailRideControl();
       });
 
       window.addEventListener("keydown", (event) => {
@@ -6913,7 +6994,13 @@ const runtimeConfig = {
             stepFocusObject(1);
           } else {
             railRideDirection = 1;
-            requestStation(Math.min(stations.length - 1, arrivingAt + 1), false, "teleport");
+            requestStation(
+              Math.min(stations.length - 1, arrivingAt + 1),
+              false,
+              projectJourney.manualPlaneNavigation === "roller-coaster"
+                ? "roller-coaster"
+                : projectPlaneTravelMode
+            );
           }
         }
         if (event.key === "ArrowLeft") {
@@ -6922,10 +7009,16 @@ const runtimeConfig = {
             stepFocusObject(-1);
           } else {
             railRideDirection = -1;
-            requestStation(Math.max(0, arrivingAt - 1), false, "teleport");
+            requestStation(
+              Math.max(0, arrivingAt - 1),
+              false,
+              projectJourney.manualPlaneNavigation === "roller-coaster"
+                ? "roller-coaster"
+                : projectPlaneTravelMode
+            );
           }
         }
-        if (event.key === "Home") requestStation(0, false, "teleport");
+        if (event.key === "Home") requestStation(0, false, projectPlaneTravelMode);
       });
 
       // v2 demo default: ordered songs across every plane, wrapping forever.
@@ -6993,6 +7086,30 @@ const runtimeConfig = {
     backdrop-filter:blur(10px);
   }
 
+  .another-ride {
+    position:absolute;
+    z-index:4;
+    left:50%;
+    bottom:52px;
+    transform:translateX(-50%);
+    min-height:34px;
+    padding:0 14px;
+    border:1px solid rgba(255,255,255,.3);
+    border-radius:999px;
+    background:rgba(7,9,12,.86);
+    color:#fff;
+    font:700 11px/1 ui-sans-serif,system-ui;
+    letter-spacing:.06em;
+    cursor:pointer;
+    backdrop-filter:blur(10px);
+  }
+
+  .another-ride[hidden] {
+    display:none;
+  }
+
+  .another-ride:hover,
+  .another-ride:focus-visible,
   .rail-ride-next:hover,
   .rail-ride-next:focus-visible {
     background:rgba(18,22,28,.94);
