@@ -281,6 +281,7 @@ const runtimeConfig = {
   type WeightedJourneyResource = {
     id: string;
     weight?: number;
+    probability?: number;
   };
   type JourneyResourcePool = {
     id: string;
@@ -564,12 +565,17 @@ const runtimeConfig = {
         if (typeof entry === "string") return { id: entry, weight: 1 };
         if (!entry || typeof entry.id !== "string" || !entry.id) return null;
         const rawWeight = Number(entry.weight);
+        const rawProbability = Number(entry.probability);
         return {
           id: entry.id,
           weight:
             Number.isFinite(rawWeight) && rawWeight > 0
               ? rawWeight
-              : 1
+              : 1,
+          probability:
+            Number.isFinite(rawProbability)
+              ? Math.max(0, Math.min(1, rawProbability))
+              : undefined
         };
       })
       .filter((entry): entry is WeightedJourneyResource => Boolean(entry));
@@ -643,16 +649,60 @@ const runtimeConfig = {
     const candidates = nonRecent.length ? nonRecent : resources;
     if (!candidates.length) return null;
 
-    const total = candidates.reduce(
-      (sum, entry) => sum + Math.max(0.0001, Number(entry.weight) || 1),
-      0
+    // Explicit probabilities reserve exact portions of the draw space.
+    // Example: 0.30 + 0.20 leaves 0.50 for the remaining weighted pool.
+    const explicit = candidates.filter(
+      (entry) =>
+        typeof entry.probability === "number" &&
+        Number.isFinite(entry.probability) &&
+        entry.probability > 0
     );
-    let pick = Math.random() * total;
-    for (const entry of candidates) {
-      pick -= Math.max(0.0001, Number(entry.weight) || 1);
-      if (pick <= 0) return entry.id;
+    const fallback = candidates.filter(
+      (entry) => !explicit.includes(entry)
+    );
+
+    const explicitTotal = Math.min(
+      1,
+      explicit.reduce(
+        (sum, entry) => sum + Math.max(0, Math.min(1, Number(entry.probability) || 0)),
+        0
+      )
+    );
+
+    let roll = Math.random();
+    let cursor = 0;
+    for (const entry of explicit) {
+      const probability = Math.max(
+        0,
+        Math.min(1, Number(entry.probability) || 0)
+      );
+      const capped = Math.min(probability, Math.max(0, 1 - cursor));
+      cursor += capped;
+      if (roll < cursor) return entry.id;
+      if (cursor >= 1) break;
     }
-    return candidates[candidates.length - 1]?.id ?? null;
+
+    // Any unreserved probability falls through to relative weights.
+    if (fallback.length && roll >= explicitTotal) {
+      const totalWeight = fallback.reduce(
+        (sum, entry) => sum + Math.max(0.0001, Number(entry.weight) || 1),
+        0
+      );
+      let weightedPick =
+        ((roll - explicitTotal) / Math.max(0.0001, 1 - explicitTotal)) *
+        totalWeight;
+      for (const entry of fallback) {
+        weightedPick -= Math.max(0.0001, Number(entry.weight) || 1);
+        if (weightedPick <= 0) return entry.id;
+      }
+      return fallback[fallback.length - 1]?.id ?? null;
+    }
+
+    // If explicit probabilities consume the full space, or no weighted fallback
+    // exists, use the final explicit member as a deterministic safety net.
+    return explicit[explicit.length - 1]?.id ??
+      candidates[candidates.length - 1]?.id ??
+      null;
   }
 
   function transitionResourcePolicy(
