@@ -3474,6 +3474,7 @@ const runtimeConfig = {
             ),
             fallbackSongHistoryWindow, avoidCurrentPlaneSongs: avoidCurrentPlaneSongsForFallback
           },
+          mediaEnvelope: mediaEnvelopeDebugState(),
           renderer: {
             initialized: Boolean(threeRenderer && threeScene && threeCamera),
             contextLost: Boolean(threeRenderer?.getContext?.().isContextLost?.()),
@@ -3506,6 +3507,7 @@ const runtimeConfig = {
         getRendererDebugState: () => getDebugSnapshot().renderer,
         getAudioDebugState: () => getDebugSnapshot().audio,
         getRandomizationDebugState: () => getDebugSnapshot().randomization,
+        getMediaEnvelopeDebugState: () => mediaEnvelopeDebugState(),
         getGlbSelectionDebugState(stationId = activeStationId) {
           const randomization = getDebugSnapshot().randomization as {
             glbSelectionDecisions?: Array<Record<string, unknown>>;
@@ -5101,6 +5103,115 @@ const runtimeConfig = {
         }
       }
 
+      Object.assign(window.webrevPresentationSettings ?? {}, {
+        listMediaEnvelopePrograms() {
+          return [...mediaEnvelopePrograms.values()].map((program) =>
+            JSON.parse(JSON.stringify(program))
+          );
+        },
+        getMediaEnvelopeProgram(id: string) {
+          const program = mediaEnvelopePrograms.get(id);
+          return program ? JSON.parse(JSON.stringify(program)) : null;
+        },
+        setMediaEnvelopeProgram(program: MediaEnvelopeProgram) {
+          if (!program || typeof program.id !== "string" || !program.id) {
+            throw new Error("Media envelope program requires a stable id.");
+          }
+          const normalized = JSON.parse(JSON.stringify(program));
+          mediaEnvelopePrograms.set(normalized.id, normalized);
+          window.dispatchEvent(new CustomEvent("webrev:media-envelope-program-changed", {
+            detail: { id: normalized.id, operation: "set" }
+          }));
+          return JSON.parse(JSON.stringify(normalized));
+        },
+        removeMediaEnvelopeProgram(id: string) {
+          if (activeMediaEnvelope?.program.id === id) disposeActiveMediaEnvelope();
+          const removed = mediaEnvelopePrograms.delete(id);
+          if (removed) {
+            mediaEnvelopeBindings = mediaEnvelopeBindings.filter(
+              (binding) => binding.programId !== id
+            );
+            window.dispatchEvent(new CustomEvent("webrev:media-envelope-program-changed", {
+              detail: { id, operation: "remove" }
+            }));
+          }
+          return removed;
+        },
+        listMediaEnvelopeBindings() {
+          return mediaEnvelopeBindings.map((binding) =>
+            JSON.parse(JSON.stringify(binding))
+          );
+        },
+        setMediaEnvelopeBinding(binding: MediaEnvelopeBinding) {
+          if (
+            !binding ||
+            typeof binding.id !== "string" ||
+            !binding.id ||
+            typeof binding.programId !== "string" ||
+            !binding.programId ||
+            !binding.trigger ||
+            typeof binding.trigger.type !== "string"
+          ) {
+            throw new Error("Media envelope binding requires id, programId, and trigger.");
+          }
+          const normalized = JSON.parse(JSON.stringify(binding));
+          const index = mediaEnvelopeBindings.findIndex(
+            (candidate) => candidate.id === normalized.id
+          );
+          if (index >= 0) mediaEnvelopeBindings[index] = normalized;
+          else mediaEnvelopeBindings.push(normalized);
+          window.dispatchEvent(new CustomEvent("webrev:media-envelope-binding-changed", {
+            detail: { id: normalized.id, operation: "set" }
+          }));
+          return JSON.parse(JSON.stringify(normalized));
+        },
+        removeMediaEnvelopeBinding(id: string) {
+          const before = mediaEnvelopeBindings.length;
+          mediaEnvelopeBindings = mediaEnvelopeBindings.filter(
+            (binding) => binding.id !== id
+          );
+          const removed = mediaEnvelopeBindings.length !== before;
+          if (removed) {
+            window.dispatchEvent(new CustomEvent("webrev:media-envelope-binding-changed", {
+              detail: { id, operation: "remove" }
+            }));
+          }
+          return removed;
+        },
+        bindSongToMediaEnvelope(
+          trackId: string,
+          programId: string,
+          bindingId = `song:${trackId}→${programId}`
+        ) {
+          const binding: MediaEnvelopeBinding = {
+            id: bindingId,
+            trigger: { type: "song", trackId },
+            programId
+          };
+          const index = mediaEnvelopeBindings.findIndex(
+            (candidate) => candidate.id === bindingId
+          );
+          if (index >= 0) mediaEnvelopeBindings[index] = binding;
+          else mediaEnvelopeBindings.push(binding);
+          window.dispatchEvent(new CustomEvent("webrev:media-envelope-binding-changed", {
+            detail: { id: bindingId, operation: "set" }
+          }));
+          return JSON.parse(JSON.stringify(binding));
+        },
+        activateMediaEnvelope(
+          programId: string,
+          context: Record<string, unknown> = {}
+        ) {
+          return activateMediaEnvelopeInternal(programId, context);
+        },
+        deactivateMediaEnvelope() {
+          disposeActiveMediaEnvelope();
+        },
+        getActiveMediaEnvelopeState() {
+          return mediaEnvelopeDebugState();
+        }
+      });
+
       function hemisphereEditorPose() {
         if (presentationSettings.editor.mode !== "hemisphere") return null;
         const center = stationCenter(arrivingAt);
@@ -6693,6 +6804,7 @@ const runtimeConfig = {
       }
 
       function stopFocusAudio() {
+        disposeActiveMediaEnvelope();
         if (focusAudioFadeFrame) cancelAnimationFrame(focusAudioFadeFrame);
         focusAudioFadeFrame = 0;
         focusAudioSourceUrl = "";
@@ -6719,6 +6831,19 @@ const runtimeConfig = {
         focusAudioSourceUrl = url;
         focusAudioCurrentAssetName = assetName;
         rememberPlayedTrack(url);
+
+        const activeTrack = trackCatalog().find(
+          (candidate: { name: string; url: string }) => candidate.url === url
+        );
+        if (activeTrack) {
+          activateMediaEnvelopeForTrigger(
+            { type: "song", trackId: activeTrack.name },
+            {
+              stationIndex: arrivingAt,
+              focusedAssetName: assetName
+            }
+          );
+        }
 
         audio.addEventListener("ended", () => {
           if (focusAudioElement !== audio) return;
@@ -7077,6 +7202,7 @@ const runtimeConfig = {
         for (const index of drawOrder) drawStation(index, now);
 
         if (threeRenderer && threeScene && threeCamera) {
+          updateActiveMediaEnvelope();
           const cam = cameraPosition();
           threeCamera.position.set(cam.x, cam.y, cam.z);
 
