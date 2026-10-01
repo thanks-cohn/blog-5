@@ -274,6 +274,11 @@ const runtimeConfig = {
     maxGlbs: number | "all";
     representation?: "glb" | "icon";
   };
+  type RandomGlbDiversityPolicy = {
+    avoidWithinRun: boolean;
+    avoidAdjacent: boolean;
+    recentPlaneMultipliers: Record<number, number>;
+  };
   type PlaneResidencyPolicy =
     | { mode: "cycles"; value: number }
     | { mode: "songs"; value: number }
@@ -451,6 +456,10 @@ const runtimeConfig = {
         removeAssetTrackExclusion(name: string, track: string): string[];
         getUnpairedGlbLimit(stationId?: string): UnpairedGlbCountPolicy;
         setUnpairedGlbLimit(limit: UnpairedGlbCountPolicy, stationId?: string): UnpairedGlbCountPolicy;
+        getRandomGlbDiversityPolicy(): RandomGlbDiversityPolicy;
+        setRandomGlbDiversityPolicy(policy: Partial<RandomGlbDiversityPolicy>): RandomGlbDiversityPolicy;
+        getRandomGlbSelectionHistory(): string[][];
+        clearRandomGlbSelectionHistory(): void;
         getPlanePreviewPolicy(stationId?: string): PlanePreviewPolicy;
         setPlanePreviewPolicy(policy: Partial<PlanePreviewPolicy>, stationId?: string): PlanePreviewPolicy;
         getFallbackSongHistoryWindow(): number;
@@ -1030,7 +1039,7 @@ const runtimeConfig = {
     const journeyClickStartStorageKey = "webrev:journey-click-start:v1";
     const unpairedGlbLimitStorageKey = "webrev:unpaired-glb-limit:v2";
     const planePreviewPolicyStorageKey = "webrev:plane-preview-policy:v1";
-    const fallbackSongHistoryWindowStorageKey = "webrev:fallback-song-history-window:v1";
+    const fallbackSongHistoryWindowStorageKey = "webrev:fallback-song-history-window:v2";
     const avoidCurrentPlaneSongsStorageKey = "webrev:avoid-current-plane-songs:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
 
@@ -1066,6 +1075,82 @@ const runtimeConfig = {
     }
 
     let unpairedGlbLimits: Record<string, UnpairedGlbCountPolicy> = loadUnpairedGlbLimits();
+
+    let randomGlbDiversityPolicy: RandomGlbDiversityPolicy = {
+      avoidWithinRun: true,
+      avoidAdjacent: true,
+      recentPlaneMultipliers: {
+        1: 0.5,
+        2: 0.8
+      }
+    };
+
+    let randomGlbSelectionHistory: string[][] = [];
+
+    function normalizeRandomGlbDiversityPolicy(
+      value: Partial<RandomGlbDiversityPolicy> | undefined
+    ): RandomGlbDiversityPolicy {
+      const multipliers: Record<number, number> = {};
+      const source = value?.recentPlaneMultipliers ?? randomGlbDiversityPolicy.recentPlaneMultipliers;
+      for (const [distanceKey, multiplierValue] of Object.entries(source ?? {})) {
+        const distance = Math.max(1, Math.floor(Number(distanceKey) || 0));
+        const multiplier = Math.max(0, Math.min(1, Number(multiplierValue)));
+        if (distance > 0 && Number.isFinite(multiplier)) {
+          multipliers[distance] = multiplier;
+        }
+      }
+      return {
+        avoidWithinRun:
+          typeof value?.avoidWithinRun === "boolean"
+            ? value.avoidWithinRun
+            : randomGlbDiversityPolicy.avoidWithinRun,
+        avoidAdjacent:
+          typeof value?.avoidAdjacent === "boolean"
+            ? value.avoidAdjacent
+            : randomGlbDiversityPolicy.avoidAdjacent,
+        recentPlaneMultipliers: multipliers
+      };
+    }
+
+    function weightedRandomGlbSample(
+      candidates: any[],
+      count: number,
+      planeIndex: number,
+      rand: () => number
+    ) {
+      const chosen: any[] = [];
+      const pool = [...candidates];
+
+      while (pool.length && chosen.length < count) {
+        const weighted = pool.map((asset: any) => {
+          let weight = 1;
+          for (let distance = 1; distance <= planeIndex; distance++) {
+            const priorPlane = randomGlbSelectionHistory[planeIndex - distance] ?? [];
+            if (!priorPlane.includes(asset.name)) continue;
+            const multiplier =
+              randomGlbDiversityPolicy.recentPlaneMultipliers[distance];
+            if (typeof multiplier === "number") weight *= multiplier;
+          }
+          return { asset, weight: Math.max(0.0001, weight) };
+        });
+
+        const total = weighted.reduce((sum, entry) => sum + entry.weight, 0);
+        let pick = rand() * total;
+        let selectedIndex = 0;
+        for (let i = 0; i < weighted.length; i++) {
+          pick -= weighted[i].weight;
+          if (pick <= 0) {
+            selectedIndex = i;
+            break;
+          }
+        }
+
+        chosen.push(weighted[selectedIndex].asset);
+        pool.splice(selectedIndex, 1);
+      }
+
+      return chosen;
+    }
 
     function normalizePlanePreviewPolicy(
       value: Partial<PlanePreviewPolicy> | undefined,
@@ -1123,7 +1208,7 @@ const runtimeConfig = {
         const value = Number(raw);
         if (Number.isFinite(value)) return Math.max(0, Math.floor(value));
       } catch {}
-      return 2;
+      return 4;
     }
 
     let fallbackSongHistoryWindow = loadFallbackSongHistoryWindow();
@@ -2544,6 +2629,23 @@ const runtimeConfig = {
         saveUnpairedGlbLimits();
         return JSON.parse(JSON.stringify(normalized));
       },
+      getRandomGlbDiversityPolicy() {
+        return JSON.parse(JSON.stringify(randomGlbDiversityPolicy));
+      },
+      setRandomGlbDiversityPolicy(policy: Partial<RandomGlbDiversityPolicy>) {
+        randomGlbDiversityPolicy =
+          normalizeRandomGlbDiversityPolicy(policy);
+        window.dispatchEvent(new CustomEvent("webrev:random-glb-diversity-policy", {
+          detail: JSON.parse(JSON.stringify(randomGlbDiversityPolicy))
+        }));
+        return JSON.parse(JSON.stringify(randomGlbDiversityPolicy));
+      },
+      getRandomGlbSelectionHistory() {
+        return randomGlbSelectionHistory.map((plane) => [...plane]);
+      },
+      clearRandomGlbSelectionHistory() {
+        randomGlbSelectionHistory = [];
+      },
       getPlanePreviewPolicy(stationId?: string) {
         if (stationId && planePreviewPolicies[stationId]) {
           return JSON.parse(JSON.stringify(planePreviewPolicies[stationId]));
@@ -3043,7 +3145,14 @@ const runtimeConfig = {
       let journeyPlaneCyclesCompleted = 0;
       const journeyPlanePlayedTracks = new Set<string>();
 
-      let layouts = stations.map((station: any, index: number) => generateLayout(station, index));
+      function generateAllLayouts() {
+        randomGlbSelectionHistory = [];
+        return stations.map((station: any, index: number) =>
+          generateLayout(station, index)
+        );
+      }
+
+      let layouts = generateAllLayouts();
       captureStylePositions = () => {
         const positions: Record<string, any> = {};
         for (const layout of layouts) {
@@ -3065,7 +3174,7 @@ const runtimeConfig = {
       ensureThree();
 
       function rebuildAssetLayouts() {
-        layouts = stations.map((station: any, index: number) => generateLayout(station, index));
+        layouts = generateAllLayouts();
 
         // Rebuilds may change the randomized GLB sample. Dispose GPU resources
         // for models no longer referenced by any current layout instead of
@@ -3871,17 +3980,71 @@ const runtimeConfig = {
 
         const unpairedPolicy = resolvedUnpairedGlbLimit(station.id);
         const unpairedLimit = resolveUnpairedGlbCount(unpairedPolicy, rand);
-        const shuffledUnpaired = [...unpaired3d];
-        for (let i = shuffledUnpaired.length - 1; i > 0; i--) {
-          const j = Math.floor(rand() * (i + 1));
-          [shuffledUnpaired[i], shuffledUnpaired[j]] =
-            [shuffledUnpaired[j], shuffledUnpaired[i]];
+        const targetCount =
+          unpairedLimit === "all"
+            ? unpaired3d.length
+            : Math.max(0, unpairedLimit);
+
+        const usedEarlier = new Set(
+          randomGlbSelectionHistory.slice(0, index).flat()
+        );
+        const previousPlane = new Set(
+          index > 0 ? randomGlbSelectionHistory[index - 1] ?? [] : []
+        );
+
+        // First preference: never used anywhere earlier in this complete run.
+        let preferred = randomGlbDiversityPolicy.avoidWithinRun
+          ? unpaired3d.filter((asset: any) => !usedEarlier.has(asset.name))
+          : [...unpaired3d];
+
+        // Adjacent-plane repeats are a stronger visual repetition, so avoid them
+        // whenever there are enough alternatives.
+        if (randomGlbDiversityPolicy.avoidAdjacent) {
+          const nonAdjacent = preferred.filter(
+            (asset: any) => !previousPlane.has(asset.name)
+          );
+          if (nonAdjacent.length >= targetCount) preferred = nonAdjacent;
         }
 
-        const sampledUnpaired =
-          unpairedLimit === "all"
-            ? shuffledUnpaired
-            : shuffledUnpaired.slice(0, unpairedLimit);
+        let sampledUnpaired = weightedRandomGlbSample(
+          preferred,
+          Math.min(targetCount, preferred.length),
+          index,
+          rand
+        );
+
+        // If the never-used pool is exhausted, fill from previously used GLBs,
+        // still preferring non-adjacent choices and applying distance penalties.
+        if (sampledUnpaired.length < targetCount) {
+          const selectedNames = new Set(
+            sampledUnpaired.map((asset: any) => asset.name)
+          );
+          let fallbackPool = unpaired3d.filter(
+            (asset: any) => !selectedNames.has(asset.name)
+          );
+
+          if (randomGlbDiversityPolicy.avoidAdjacent) {
+            const nonAdjacentFallback = fallbackPool.filter(
+              (asset: any) => !previousPlane.has(asset.name)
+            );
+            if (nonAdjacentFallback.length >= targetCount - sampledUnpaired.length) {
+              fallbackPool = nonAdjacentFallback;
+            }
+          }
+
+          sampledUnpaired = [
+            ...sampledUnpaired,
+            ...weightedRandomGlbSample(
+              fallbackPool,
+              targetCount - sampledUnpaired.length,
+              index,
+              rand
+            )
+          ];
+        }
+
+        randomGlbSelectionHistory[index] =
+          sampledUnpaired.map((asset: any) => String(asset.name));
 
         const allDiscovered = [
           ...stationInventory.filter((asset: any) => asset?.kind !== "3d"),
