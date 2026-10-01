@@ -41,6 +41,36 @@ const discoveredMusic = import.meta.glob("../assets/music/*.{mp3,wav,ogg,m4a,aac
   import: "default"
 }) as Record<string, string>;
 
+const discoveredEnvelopeMedia = import.meta.glob("../assets/**/*.{mp4,webm,gif,png,jpg,jpeg,webp,avif}", {
+  eager: true,
+  query: "?url",
+  import: "default"
+}) as Record<string, string>;
+
+const discoveredOversphereVideos = import.meta.glob("../assets/oversphere/videos/*.{mp4,webm}", {
+  eager: true,
+  query: "?url",
+  import: "default"
+}) as Record<string, string>;
+
+const oversphereVideos = Object.entries(discoveredOversphereVideos)
+  .map(([path, url]) => ({
+    id: path.split("/").pop() ?? path,
+    name: path.split("/").pop() ?? path,
+    path,
+    url
+  }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+const mediaEnvelopeMedia = Object.entries(discoveredEnvelopeMedia)
+  .map(([path, url]) => ({
+    id: path.split("/").pop() ?? path,
+    name: path.split("/").pop() ?? path,
+    path,
+    url
+  }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
 const musicTracks = Object.entries(discoveredMusic)
   .map(([path, url]) => ({ name: path.split("/").pop() ?? path, url }))
   .sort((a, b) => a.name.localeCompare(b.name));
@@ -79,6 +109,8 @@ const runtimeConfig = {
   assetInventory,
   centerImagesByArtwork,
   musicTracks,
+  mediaEnvelopeMedia,
+  oversphereVideos,
   resolvedLinks: links
 };
 ---
@@ -265,6 +297,85 @@ const runtimeConfig = {
   type FocusPlaybackScope = "station" | "all";
   type FocusPlaybackOrder = "ordered" | "random";
   type PlaneTravelMode = "teleport" | "roller-coaster" | "custom";
+
+  type MediaEnvelopeTrigger =
+    | { type: "song"; trackId: string }
+    | { type: "object-focus"; assetName: string }
+    | { type: "station-enter"; stationId: string }
+    | { type: "journey-progress"; segmentId: string; gte: number }
+    | { type: "event"; eventName: string }
+    | { type: "custom"; resolverId: string; options?: Record<string, unknown> };
+
+  type MediaEnvelopeMediaSource = {
+    id: string;
+    type: "video" | "image";
+    src: string;
+    loop?: boolean;
+    muted?: boolean;
+    opacity?: number;
+  };
+
+  type MediaEnvelopeProgram = {
+    id: string;
+    envelope?: {
+      shape?: "sphere";
+      origin?: { mode?: "focused-object" | "station-center"; offset?: Vec3 };
+      growth?: { mode?: "instant" | "timed"; durationMs?: number; easing?: "linear" | "easeOutCubic" };
+    };
+    coverage?: {
+      include?: Array<"current-main-panel" | "next-main-panel">;
+      padding?: number;
+      panelAllowance?: number;
+      minRadius?: number;
+    };
+    surface?: {
+      side?: "inside";
+      orientation?: { mode?: "upright-to-world" | "surface-native" };
+    };
+    protectedRegions?: Array<{
+      target: "current-main-panel" | "next-main-panel";
+      mode?: "avoid";
+      angularRadiusDeg?: number;
+      paddingPx?: number;
+    }>;
+    layout?: {
+      mode?: "grid" | "hero" | "grid-with-hero";
+      rows?: number;
+      columns?: number;
+      horizontalArcDeg?: number;
+      verticalArcDeg?: number;
+      gapDeg?: number;
+      tileAngularWidthDeg?: number;
+      tileAngularHeightDeg?: number;
+    };
+    media?: MediaEnvelopeMediaSource[];
+    choreography?: {
+      clock?: "binding";
+      cues?: Array<Record<string, unknown>>;
+    };
+  };
+
+  type MediaEnvelopeBinding = {
+    id: string;
+    trigger: MediaEnvelopeTrigger;
+    programId: string;
+    priority?: number;
+  };
+
+  type MediaEnvelopeRuntimeState = {
+    active: boolean;
+    bindingId?: string;
+    programId?: string;
+    trigger?: Record<string, unknown>;
+    stationId?: string;
+    focusedAssetName?: string;
+    resolvedRadius?: number;
+    origin?: Vec3;
+    clockSeconds?: number;
+    tileCount?: number;
+    tiles?: Array<Record<string, unknown>>;
+    activeCues?: string[];
+  };
   type UnpairedGlbCountPolicy =
     | number
     | "all"
@@ -441,6 +552,7 @@ const runtimeConfig = {
     journey: Record<string, unknown>;
     audio: Record<string, unknown>;
     randomization: Record<string, unknown>;
+    mediaEnvelope: MediaEnvelopeRuntimeState;
     renderer: Record<string, unknown>;
     planes: Array<Record<string, unknown>>;
   };
@@ -457,6 +569,7 @@ const runtimeConfig = {
         getAudioDebugState(): Record<string, unknown>;
         getRandomizationDebugState(): Record<string, unknown>;
         getGlbSelectionDebugState(stationId?: string): Record<string, unknown> | null;
+        getMediaEnvelopeDebugState(): MediaEnvelopeRuntimeState;
       };
       webrevPresentationSettings?: {
         get(key?: PresentationSettingKey): PresentationSettingsSnapshot | PresentationSettingValue;
@@ -517,6 +630,17 @@ const runtimeConfig = {
         saveSettings(): Record<string, unknown> | null;
         getStyleSnapshot(): Record<string, unknown> | null;
         downloadStyleSnapshot(): boolean;
+        listMediaEnvelopePrograms(): MediaEnvelopeProgram[];
+        getMediaEnvelopeProgram(id: string): MediaEnvelopeProgram | null;
+        setMediaEnvelopeProgram(program: MediaEnvelopeProgram): MediaEnvelopeProgram;
+        removeMediaEnvelopeProgram(id: string): boolean;
+        listMediaEnvelopeBindings(): MediaEnvelopeBinding[];
+        setMediaEnvelopeBinding(binding: MediaEnvelopeBinding): MediaEnvelopeBinding;
+        removeMediaEnvelopeBinding(id: string): boolean;
+        bindSongToMediaEnvelope(trackId: string, programId: string, bindingId?: string): MediaEnvelopeBinding;
+        activateMediaEnvelope(programId: string, context?: Record<string, unknown>): boolean;
+        deactivateMediaEnvelope(): void;
+        getActiveMediaEnvelopeState(): MediaEnvelopeRuntimeState;
         getSpatialEnvelope(name: string): SpatialEnvelopeConfig | null;
         setSpatialEnvelope(name: string, patch: Partial<SpatialEnvelopeConfig>): void;
         setEnvelopeDebug(name: string, visible: boolean): void;
@@ -807,6 +931,7 @@ const runtimeConfig = {
         threeRetryAt.clear();
         debugGlobes.clear();
         envelopeDebugGlobes.clear();
+        activeMediaEnvelope = null;
         ensureThree();
         window.dispatchEvent(new CustomEvent("webrev:webgl-context-restored"));
       });
@@ -1066,6 +1191,65 @@ const runtimeConfig = {
     const fallbackSongHistoryWindowStorageKey = "webrev:fallback-song-history-window:v2";
     const avoidCurrentPlaneSongsStorageKey = "webrev:avoid-current-plane-songs:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
+
+    const mediaEnvelopePrograms = new Map<string, MediaEnvelopeProgram>(
+      (Array.isArray(config.mediaEnvelopePrograms) ? config.mediaEnvelopePrograms : [])
+        .filter((program: any) => program && typeof program.id === "string" && program.id)
+        .map((program: MediaEnvelopeProgram) => [program.id, JSON.parse(JSON.stringify(program))])
+    );
+    let mediaEnvelopeBindings: MediaEnvelopeBinding[] =
+      (Array.isArray(config.mediaEnvelopeBindings) ? config.mediaEnvelopeBindings : [])
+        .filter((binding: any) =>
+          binding &&
+          typeof binding.id === "string" &&
+          binding.id &&
+          typeof binding.programId === "string" &&
+          binding.trigger &&
+          typeof binding.trigger.type === "string"
+        )
+        .map((binding: MediaEnvelopeBinding) => JSON.parse(JSON.stringify(binding)));
+    const mediaEnvelopeCatalog = new Map<string, string>();
+    for (const entry of Array.isArray(config.mediaEnvelopeMedia) ? config.mediaEnvelopeMedia : []) {
+      if (typeof entry?.id === "string" && typeof entry?.url === "string") {
+        mediaEnvelopeCatalog.set(entry.id, entry.url);
+      }
+      if (typeof entry?.name === "string" && typeof entry?.url === "string") {
+        mediaEnvelopeCatalog.set(entry.name, entry.url);
+      }
+      if (typeof entry?.path === "string" && typeof entry?.url === "string") {
+        mediaEnvelopeCatalog.set(entry.path, entry.url);
+      }
+    }
+
+    type ActiveMediaEnvelopeTile = {
+      mediaId: string;
+      mesh: any;
+      material: any;
+      texture: any;
+      video?: HTMLVideoElement;
+      baseOpacity: number;
+      scale: number;
+      opacity: number;
+      hero: boolean;
+      surfaceCoordinate: { azimuthDeg: number; elevationDeg: number };
+    };
+
+    type ActiveMediaEnvelope = {
+      program: MediaEnvelopeProgram;
+      bindingId?: string;
+      trigger: Record<string, unknown>;
+      stationIndex: number;
+      focusedAssetName: string;
+      origin: Vec3;
+      radius: number;
+      group: any;
+      tiles: ActiveMediaEnvelopeTile[];
+      activatedAt: number;
+      cueActivatedAt: Map<number, number>;
+      activeCueLabels: Set<string>;
+    };
+
+    let activeMediaEnvelope: ActiveMediaEnvelope | null = null;
 
     function loadUnpairedGlbLimits() {
       let stored: Record<string, unknown> = {};
@@ -3307,6 +3491,7 @@ const runtimeConfig = {
             ),
             fallbackSongHistoryWindow, avoidCurrentPlaneSongs: avoidCurrentPlaneSongsForFallback
           },
+          mediaEnvelope: mediaEnvelopeDebugState(),
           renderer: {
             initialized: Boolean(threeRenderer && threeScene && threeCamera),
             contextLost: Boolean(threeRenderer?.getContext?.().isContextLost?.()),
@@ -3339,6 +3524,7 @@ const runtimeConfig = {
         getRendererDebugState: () => getDebugSnapshot().renderer,
         getAudioDebugState: () => getDebugSnapshot().audio,
         getRandomizationDebugState: () => getDebugSnapshot().randomization,
+        getMediaEnvelopeDebugState: () => mediaEnvelopeDebugState(),
         getGlbSelectionDebugState(stationId = activeStationId) {
           const randomization = getDebugSnapshot().randomization as {
             glbSelectionDecisions?: Array<Record<string, unknown>>;
@@ -4402,6 +4588,646 @@ const runtimeConfig = {
         const railPoint = topFacePoint(z);
         return { x: railPoint.x, y: railPoint.y + 0.9, z };
       }
+
+      function mediaEnvelopeSourceUrl(src: string) {
+        return mediaEnvelopeCatalog.get(src) ?? src;
+      }
+
+      function mediaEnvelopeDistance(a: Vec3, b: Vec3) {
+        return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+      }
+
+      function mediaEnvelopeDirection(from: Vec3, to: Vec3): Vec3 | null {
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const dz = to.z - from.z;
+        const length = Math.hypot(dx, dy, dz);
+        if (length < 0.0001) return null;
+        return { x: dx / length, y: dy / length, z: dz / length };
+      }
+
+      function mediaEnvelopeAngles(direction: Vec3) {
+        return {
+          azimuthDeg: Math.atan2(direction.x, direction.z) * 180 / Math.PI,
+          elevationDeg: Math.asin(Math.max(-1, Math.min(1, direction.y))) * 180 / Math.PI
+        };
+      }
+
+      function mediaEnvelopeUnitFromAngles(azimuthDeg: number, elevationDeg: number): Vec3 {
+        const az = azimuthDeg * Math.PI / 180;
+        const el = elevationDeg * Math.PI / 180;
+        const ce = Math.cos(el);
+        return {
+          x: ce * Math.sin(az),
+          y: Math.sin(el),
+          z: ce * Math.cos(az)
+        };
+      }
+
+      function mediaEnvelopeAngularDistanceDeg(a: Vec3, b: Vec3) {
+        const dot = Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y + a.z * b.z));
+        return Math.acos(dot) * 180 / Math.PI;
+      }
+
+      function mediaEnvelopeFocusedObject(stationIndex: number, assetName: string) {
+        return (layouts[stationIndex] ?? []).find(
+          (candidate: SceneObject) =>
+            candidate.kind === "3d" &&
+            candidate.visible !== false &&
+            candidate.name === assetName
+        ) ?? null;
+      }
+
+      function resolveMediaEnvelopeOrigin(
+        program: MediaEnvelopeProgram,
+        stationIndex: number,
+        assetName: string
+      ): Vec3 {
+        const center = stationCenter(stationIndex);
+        const object = mediaEnvelopeFocusedObject(stationIndex, assetName);
+        const mode = program.envelope?.origin?.mode ?? "focused-object";
+        const offset = program.envelope?.origin?.offset ?? { x: 0, y: 0, z: 0 };
+        const base =
+          mode === "focused-object" && object
+            ? {
+                x: center.x + object.local.x,
+                y: center.y + object.local.y,
+                z: center.z + object.local.z
+              }
+            : center;
+        return {
+          x: base.x + Number(offset.x || 0),
+          y: base.y + Number(offset.y || 0),
+          z: base.z + Number(offset.z || 0)
+        };
+      }
+
+      function resolveMediaEnvelopeRadius(
+        program: MediaEnvelopeProgram,
+        stationIndex: number,
+        origin: Vec3
+      ) {
+        const coverage = program.coverage ?? {};
+        const include = new Set(
+          Array.isArray(coverage.include) && coverage.include.length
+            ? coverage.include
+            : ["current-main-panel", "next-main-panel"]
+        );
+        const points: Vec3[] = [];
+        if (include.has("current-main-panel")) points.push(stationCenter(stationIndex));
+        if (include.has("next-main-panel") && stationIndex < stations.length - 1) {
+          points.push(stationCenter(stationIndex + 1));
+        }
+        const furthest = points.reduce(
+          (max, point) => Math.max(max, mediaEnvelopeDistance(origin, point)),
+          0
+        );
+        const padding = Math.max(0, Number(coverage.padding ?? 3));
+        const panelAllowance = Math.max(0, Number(coverage.panelAllowance ?? 4));
+        const minRadius = Math.max(2, Number(coverage.minRadius ?? 10));
+        return Math.max(minRadius, furthest + padding + panelAllowance);
+      }
+
+      function createMediaEnvelopePatchGeometry(
+        radius: number,
+        azimuthDeg: number,
+        elevationDeg: number,
+        widthDeg: number,
+        heightDeg: number
+      ) {
+        const T3: any = THREE;
+        const segmentsX = 12;
+        const segmentsY = 8;
+        const centerUnit = mediaEnvelopeUnitFromAngles(azimuthDeg, elevationDeg);
+        const centerOffset = {
+          x: centerUnit.x * radius,
+          y: centerUnit.y * radius,
+          z: centerUnit.z * radius
+        };
+        const positions: number[] = [];
+        const uvs: number[] = [];
+        const indices: number[] = [];
+
+        for (let y = 0; y <= segmentsY; y++) {
+          const v = y / segmentsY;
+          const elevation = elevationDeg + (v - 0.5) * heightDeg;
+          for (let x = 0; x <= segmentsX; x++) {
+            const u = x / segmentsX;
+            const azimuth = azimuthDeg + (u - 0.5) * widthDeg;
+            const point = mediaEnvelopeUnitFromAngles(azimuth, elevation);
+            positions.push(
+              point.x * radius - centerOffset.x,
+              point.y * radius - centerOffset.y,
+              point.z * radius - centerOffset.z
+            );
+            uvs.push(u, v);
+          }
+        }
+
+        for (let y = 0; y < segmentsY; y++) {
+          for (let x = 0; x < segmentsX; x++) {
+            const a = y * (segmentsX + 1) + x;
+            const b = a + 1;
+            const d = (y + 1) * (segmentsX + 1) + x;
+            const e = d + 1;
+            indices.push(a, d, b, b, d, e);
+          }
+        }
+
+        const geometry = new T3.BufferGeometry();
+        geometry.setAttribute("position", new T3.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute("uv", new T3.Float32BufferAttribute(uvs, 2));
+        geometry.setIndex(indices);
+        geometry.computeVertexNormals();
+        return { geometry, centerOffset };
+      }
+
+      function mediaEnvelopeProtectedDirections(
+        program: MediaEnvelopeProgram,
+        stationIndex: number,
+        origin: Vec3
+      ) {
+        const policies =
+          Array.isArray(program.protectedRegions) && program.protectedRegions.length
+            ? program.protectedRegions
+            : [
+                { target: "current-main-panel", mode: "avoid", angularRadiusDeg: 18 },
+                { target: "next-main-panel", mode: "avoid", angularRadiusDeg: 18 }
+              ];
+        const result: Array<{ direction: Vec3; radiusDeg: number; target: string }> = [];
+        for (const policy of policies) {
+          let targetIndex = stationIndex;
+          if (policy.target === "next-main-panel") targetIndex = stationIndex + 1;
+          if (targetIndex < 0 || targetIndex >= stations.length) continue;
+          const direction = mediaEnvelopeDirection(origin, stationCenter(targetIndex));
+          if (!direction) continue;
+          result.push({
+            direction,
+            radiusDeg: Math.max(4, Number(policy.angularRadiusDeg ?? 18)),
+            target: policy.target
+          });
+        }
+        return result;
+      }
+
+      function createMediaEnvelopeTexture(source: MediaEnvelopeMediaSource) {
+        const T3: any = THREE;
+        const src = mediaEnvelopeSourceUrl(source.src);
+        if (source.type === "video") {
+          const video = document.createElement("video");
+          video.src = src;
+          video.loop = source.loop !== false;
+          video.muted = source.muted !== false;
+          video.playsInline = true;
+          video.preload = "auto";
+          video.crossOrigin = "anonymous";
+          const texture = new T3.VideoTexture(video);
+          if ("colorSpace" in texture && T3.SRGBColorSpace) texture.colorSpace = T3.SRGBColorSpace;
+          void video.play().catch(() => {});
+          return { texture, video };
+        }
+        const texture = new T3.TextureLoader().load(src);
+        if ("colorSpace" in texture && T3.SRGBColorSpace) texture.colorSpace = T3.SRGBColorSpace;
+        return { texture };
+      }
+
+      function disposeActiveMediaEnvelope() {
+        const active = activeMediaEnvelope;
+        if (!active) return;
+        for (const tile of active.tiles) {
+          tile.video?.pause();
+          if (tile.video) {
+            tile.video.removeAttribute("src");
+            tile.video.load();
+          }
+          tile.mesh?.geometry?.dispose?.();
+          disposeMaterial(tile.material);
+          tile.texture?.dispose?.();
+        }
+        active.group?.parent?.remove?.(active.group);
+        activeMediaEnvelope = null;
+        window.dispatchEvent(new CustomEvent("webrev:media-envelope-deactivated"));
+      }
+
+      function mediaEnvelopeDebugState(): MediaEnvelopeRuntimeState {
+        const active = activeMediaEnvelope;
+        if (!active) return { active: false };
+        const clockSeconds =
+          focusAudioElement?.currentTime ??
+          Math.max(0, (performance.now() - active.activatedAt) / 1000);
+        return {
+          active: true,
+          bindingId: active.bindingId,
+          programId: active.program.id,
+          trigger: JSON.parse(JSON.stringify(active.trigger)),
+          stationId: stations[active.stationIndex]?.id,
+          focusedAssetName: active.focusedAssetName,
+          resolvedRadius: active.radius,
+          origin: { ...active.origin },
+          clockSeconds,
+          tileCount: active.tiles.length,
+          tiles: active.tiles.map((tile) => ({
+            mediaId: tile.mediaId,
+            visible: tile.mesh?.visible !== false && tile.opacity > 0.001,
+            surfaceCoordinate: { ...tile.surfaceCoordinate },
+            scale: tile.scale,
+            opacity: tile.opacity,
+            hero: tile.hero
+          })),
+          activeCues: [...active.activeCueLabels]
+        };
+      }
+
+      function activateMediaEnvelopeInternal(
+        programId: string,
+        context: Record<string, unknown> = {},
+        bindingId?: string
+      ) {
+        const program = mediaEnvelopePrograms.get(programId);
+        if (!program) return false;
+        if ((program.envelope?.shape ?? "sphere") !== "sphere") return false;
+
+        ensureThree();
+        if (!threeScene) return false;
+        disposeActiveMediaEnvelope();
+
+        const stationIndex = Math.max(
+          0,
+          Math.min(
+            stations.length - 1,
+            Number.isFinite(Number(context.stationIndex))
+              ? Number(context.stationIndex)
+              : arrivingAt
+          )
+        );
+        const focusedAssetName =
+          typeof context.focusedAssetName === "string"
+            ? context.focusedAssetName
+            : focusExperience?.object.name ?? "";
+        const origin = resolveMediaEnvelopeOrigin(program, stationIndex, focusedAssetName);
+        const radius = resolveMediaEnvelopeRadius(program, stationIndex, origin);
+
+        const T3: any = THREE;
+        const group = new T3.Group();
+        group.position.set(origin.x, origin.y, origin.z);
+        group.scale.setScalar(0.001);
+        group.renderOrder = -20;
+        threeScene.add(group);
+
+        const media = Array.isArray(program.media) ? program.media : [];
+        const layout = program.layout ?? {};
+        const rows = Math.max(1, Math.floor(Number(layout.rows ?? 3)));
+        const columns = Math.max(1, Math.floor(Number(layout.columns ?? 5)));
+        const horizontalArc = Math.max(20, Math.min(330, Number(layout.horizontalArcDeg ?? 150)));
+        const verticalArc = Math.max(16, Math.min(160, Number(layout.verticalArcDeg ?? 80)));
+        const gap = Math.max(0, Number(layout.gapDeg ?? 4));
+        const cellWidth = horizontalArc / columns;
+        const cellHeight = verticalArc / rows;
+        const tileWidth = Math.max(4, Number(layout.tileAngularWidthDeg ?? Math.max(5, cellWidth - gap)));
+        const tileHeight = Math.max(4, Number(layout.tileAngularHeightDeg ?? Math.max(5, cellHeight - gap)));
+
+        const camera = cameraPosition();
+        const forward =
+          mediaEnvelopeDirection(camera, origin) ??
+          ({ x: 0, y: 0, z: -1 } as Vec3);
+        const centerAngles = mediaEnvelopeAngles(forward);
+        const protectedDirections = mediaEnvelopeProtectedDirections(program, stationIndex, origin);
+        const candidates: Array<{ azimuthDeg: number; elevationDeg: number }> = [];
+
+        for (let row = 0; row < rows; row++) {
+          for (let column = 0; column < columns; column++) {
+            const azimuthDeg =
+              centerAngles.azimuthDeg -
+              horizontalArc / 2 +
+              cellWidth * (column + 0.5);
+            const elevationDeg =
+              centerAngles.elevationDeg +
+              verticalArc / 2 -
+              cellHeight * (row + 0.5);
+            if (elevationDeg <= -86 || elevationDeg >= 86) continue;
+            const direction = mediaEnvelopeUnitFromAngles(azimuthDeg, elevationDeg);
+            const blocked = protectedDirections.some(
+              (protectedRegion) =>
+                mediaEnvelopeAngularDistanceDeg(direction, protectedRegion.direction) <
+                protectedRegion.radiusDeg
+            );
+            if (!blocked) candidates.push({ azimuthDeg, elevationDeg });
+          }
+        }
+
+        const tiles: ActiveMediaEnvelopeTile[] = [];
+        for (let index = 0; index < media.length && index < candidates.length; index++) {
+          const source = media[index];
+          const coordinate = candidates[index];
+          if (!source?.id || !source?.src) continue;
+          const patch = createMediaEnvelopePatchGeometry(
+            radius,
+            coordinate.azimuthDeg,
+            coordinate.elevationDeg,
+            tileWidth,
+            tileHeight
+          );
+          const created = createMediaEnvelopeTexture(source);
+          const baseOpacity = Math.max(0, Math.min(1, Number(source.opacity ?? 1)));
+          const material = new T3.MeshBasicMaterial({
+            map: created.texture,
+            transparent: true,
+            opacity: baseOpacity,
+            side: T3.DoubleSide,
+            depthWrite: false,
+            toneMapped: false
+          });
+          const mesh = new T3.Mesh(patch.geometry, material);
+          mesh.position.set(
+            patch.centerOffset.x,
+            patch.centerOffset.y,
+            patch.centerOffset.z
+          );
+          mesh.renderOrder = -10;
+          group.add(mesh);
+          tiles.push({
+            mediaId: source.id,
+            mesh,
+            material,
+            texture: created.texture,
+            video: created.video,
+            baseOpacity,
+            scale: 1,
+            opacity: baseOpacity,
+            hero: false,
+            surfaceCoordinate: coordinate
+          });
+        }
+
+        activeMediaEnvelope = {
+          program,
+          bindingId,
+          trigger:
+            context.trigger && typeof context.trigger === "object"
+              ? JSON.parse(JSON.stringify(context.trigger))
+              : { type: "direct" },
+          stationIndex,
+          focusedAssetName,
+          origin,
+          radius,
+          group,
+          tiles,
+          activatedAt: performance.now(),
+          cueActivatedAt: new Map(),
+          activeCueLabels: new Set()
+        };
+
+        window.dispatchEvent(new CustomEvent("webrev:media-envelope-activated", {
+          detail: mediaEnvelopeDebugState()
+        }));
+        return true;
+      }
+
+      function activateMediaEnvelopeForTrigger(
+        trigger: MediaEnvelopeTrigger,
+        context: Record<string, unknown> = {}
+      ) {
+        const matches = mediaEnvelopeBindings
+          .filter((binding) => {
+            if (binding.trigger.type !== trigger.type) return false;
+            if (trigger.type === "song" && binding.trigger.type === "song") {
+              return binding.trigger.trackId === trigger.trackId;
+            }
+            if (trigger.type === "object-focus" && binding.trigger.type === "object-focus") {
+              return binding.trigger.assetName === trigger.assetName;
+            }
+            if (trigger.type === "station-enter" && binding.trigger.type === "station-enter") {
+              return binding.trigger.stationId === trigger.stationId;
+            }
+            return false;
+          })
+          .sort((a, b) => Number(b.priority ?? 0) - Number(a.priority ?? 0));
+        const binding = matches[0];
+        if (!binding) return false;
+        return activateMediaEnvelopeInternal(
+          binding.programId,
+          { ...context, trigger },
+          binding.id
+        );
+      }
+
+      function updateActiveMediaEnvelope() {
+        const active = activeMediaEnvelope;
+        if (!active) return;
+
+        const clockSeconds =
+          focusAudioElement?.currentTime ??
+          Math.max(0, (performance.now() - active.activatedAt) / 1000);
+        const growth = active.program.envelope?.growth ?? {};
+        const durationMs =
+          growth.mode === "instant"
+            ? 0
+            : Math.max(0, Number(growth.durationMs ?? 1200));
+        const rawGrowth =
+          durationMs <= 0
+            ? 1
+            : Math.max(0, Math.min(1, (performance.now() - active.activatedAt) / durationMs));
+        const growthT =
+          growth.easing === "linear"
+            ? rawGrowth
+            : 1 - Math.pow(1 - rawGrowth, 3);
+        active.group.scale.setScalar(Math.max(0.001, growthT));
+
+        for (const tile of active.tiles) {
+          tile.scale = 1;
+          tile.opacity = tile.baseOpacity;
+          tile.hero = false;
+          tile.mesh.visible = true;
+        }
+        active.activeCueLabels.clear();
+
+        const cues = Array.isArray(active.program.choreography?.cues)
+          ? active.program.choreography!.cues!
+          : [];
+
+        for (let cueIndex = 0; cueIndex < cues.length; cueIndex++) {
+          const cue: any = cues[cueIndex];
+          const at = Math.max(0, Number(cue.at ?? 0));
+          if (clockSeconds < at) continue;
+          const action = String(cue.action ?? "");
+          const label = cue.id ? String(cue.id) : `${action || "cue"}@${at}`;
+
+          if (action === "promote" || action === "scale") {
+            const tile = active.tiles.find((entry) => entry.mediaId === cue.mediaId);
+            if (!tile) continue;
+            const duration = Math.max(0, Number(cue.durationMs ?? 0)) / 1000;
+            const progress =
+              duration <= 0
+                ? 1
+                : Math.max(0, Math.min(1, (clockSeconds - at) / duration));
+            const eased = 1 - Math.pow(1 - progress, 3);
+            const targetScale = Math.max(0.01, Number(cue.targetScale ?? cue.scale ?? 1));
+            tile.scale = 1 + (targetScale - 1) * eased;
+            tile.hero = targetScale > 1;
+            active.activeCueLabels.add(label);
+            continue;
+          }
+
+          const condition: any = cue.when;
+          if (condition?.source === "media-scale") {
+            const watched = active.tiles.find((entry) => entry.mediaId === condition.mediaId);
+            if (!watched || watched.scale < Number(condition.gte ?? 0)) continue;
+          }
+
+          if (action === "fade-others" || action === "hide-others") {
+            if (!active.cueActivatedAt.has(cueIndex)) {
+              active.cueActivatedAt.set(cueIndex, clockSeconds);
+            }
+            const started = active.cueActivatedAt.get(cueIndex) ?? clockSeconds;
+            const duration = Math.max(0, Number(cue.durationMs ?? 0)) / 1000;
+            const progress =
+              action === "hide-others" || duration <= 0
+                ? 1
+                : Math.max(0, Math.min(1, (clockSeconds - started) / duration));
+            const except = new Set(
+              Array.isArray(cue.except)
+                ? cue.except.map((value: unknown) => String(value))
+                : cue.mediaId
+                  ? [String(cue.mediaId)]
+                  : []
+            );
+            for (const tile of active.tiles) {
+              if (!except.has(tile.mediaId)) {
+                tile.opacity = tile.baseOpacity * (1 - progress);
+              }
+            }
+            active.activeCueLabels.add(label);
+            continue;
+          }
+
+          if (action === "fade" || action === "hide") {
+            const tile = active.tiles.find((entry) => entry.mediaId === cue.mediaId);
+            if (!tile) continue;
+            const duration = Math.max(0, Number(cue.durationMs ?? 0)) / 1000;
+            const progress =
+              action === "hide" || duration <= 0
+                ? 1
+                : Math.max(0, Math.min(1, (clockSeconds - at) / duration));
+            tile.opacity = tile.baseOpacity * (1 - progress);
+            active.activeCueLabels.add(label);
+          }
+        }
+
+        for (const tile of active.tiles) {
+          tile.mesh.scale.setScalar(tile.scale);
+          tile.material.opacity = Math.max(0, Math.min(1, tile.opacity));
+          tile.mesh.visible = tile.material.opacity > 0.001;
+        }
+      }
+
+      Object.assign(window.webrevPresentationSettings ?? {}, {
+        listMediaEnvelopePrograms() {
+          return [...mediaEnvelopePrograms.values()].map((program) =>
+            JSON.parse(JSON.stringify(program))
+          );
+        },
+        getMediaEnvelopeProgram(id: string) {
+          const program = mediaEnvelopePrograms.get(id);
+          return program ? JSON.parse(JSON.stringify(program)) : null;
+        },
+        setMediaEnvelopeProgram(program: MediaEnvelopeProgram) {
+          if (!program || typeof program.id !== "string" || !program.id) {
+            throw new Error("Media envelope program requires a stable id.");
+          }
+          const normalized = JSON.parse(JSON.stringify(program));
+          mediaEnvelopePrograms.set(normalized.id, normalized);
+          window.dispatchEvent(new CustomEvent("webrev:media-envelope-program-changed", {
+            detail: { id: normalized.id, operation: "set" }
+          }));
+          return JSON.parse(JSON.stringify(normalized));
+        },
+        removeMediaEnvelopeProgram(id: string) {
+          if (activeMediaEnvelope?.program.id === id) disposeActiveMediaEnvelope();
+          const removed = mediaEnvelopePrograms.delete(id);
+          if (removed) {
+            mediaEnvelopeBindings = mediaEnvelopeBindings.filter(
+              (binding) => binding.programId !== id
+            );
+            window.dispatchEvent(new CustomEvent("webrev:media-envelope-program-changed", {
+              detail: { id, operation: "remove" }
+            }));
+          }
+          return removed;
+        },
+        listMediaEnvelopeBindings() {
+          return mediaEnvelopeBindings.map((binding) =>
+            JSON.parse(JSON.stringify(binding))
+          );
+        },
+        setMediaEnvelopeBinding(binding: MediaEnvelopeBinding) {
+          if (
+            !binding ||
+            typeof binding.id !== "string" ||
+            !binding.id ||
+            typeof binding.programId !== "string" ||
+            !binding.programId ||
+            !binding.trigger ||
+            typeof binding.trigger.type !== "string"
+          ) {
+            throw new Error("Media envelope binding requires id, programId, and trigger.");
+          }
+          const normalized = JSON.parse(JSON.stringify(binding));
+          const index = mediaEnvelopeBindings.findIndex(
+            (candidate) => candidate.id === normalized.id
+          );
+          if (index >= 0) mediaEnvelopeBindings[index] = normalized;
+          else mediaEnvelopeBindings.push(normalized);
+          window.dispatchEvent(new CustomEvent("webrev:media-envelope-binding-changed", {
+            detail: { id: normalized.id, operation: "set" }
+          }));
+          return JSON.parse(JSON.stringify(normalized));
+        },
+        removeMediaEnvelopeBinding(id: string) {
+          const before = mediaEnvelopeBindings.length;
+          mediaEnvelopeBindings = mediaEnvelopeBindings.filter(
+            (binding) => binding.id !== id
+          );
+          const removed = mediaEnvelopeBindings.length !== before;
+          if (removed) {
+            window.dispatchEvent(new CustomEvent("webrev:media-envelope-binding-changed", {
+              detail: { id, operation: "remove" }
+            }));
+          }
+          return removed;
+        },
+        bindSongToMediaEnvelope(
+          trackId: string,
+          programId: string,
+          bindingId = `song:${trackId}→${programId}`
+        ) {
+          const binding: MediaEnvelopeBinding = {
+            id: bindingId,
+            trigger: { type: "song", trackId },
+            programId
+          };
+          const index = mediaEnvelopeBindings.findIndex(
+            (candidate) => candidate.id === bindingId
+          );
+          if (index >= 0) mediaEnvelopeBindings[index] = binding;
+          else mediaEnvelopeBindings.push(binding);
+          window.dispatchEvent(new CustomEvent("webrev:media-envelope-binding-changed", {
+            detail: { id: bindingId, operation: "set" }
+          }));
+          return JSON.parse(JSON.stringify(binding));
+        },
+        activateMediaEnvelope(
+          programId: string,
+          context: Record<string, unknown> = {}
+        ) {
+          return activateMediaEnvelopeInternal(programId, context);
+        },
+        deactivateMediaEnvelope() {
+          disposeActiveMediaEnvelope();
+        },
+        getActiveMediaEnvelopeState() {
+          return mediaEnvelopeDebugState();
+        }
+      });
 
       function hemisphereEditorPose() {
         if (presentationSettings.editor.mode !== "hemisphere") return null;
@@ -5995,6 +6821,7 @@ const runtimeConfig = {
       }
 
       function stopFocusAudio() {
+        disposeActiveMediaEnvelope();
         if (focusAudioFadeFrame) cancelAnimationFrame(focusAudioFadeFrame);
         focusAudioFadeFrame = 0;
         focusAudioSourceUrl = "";
@@ -6021,6 +6848,19 @@ const runtimeConfig = {
         focusAudioSourceUrl = url;
         focusAudioCurrentAssetName = assetName;
         rememberPlayedTrack(url);
+
+        const activeTrack = trackCatalog().find(
+          (candidate: { name: string; url: string }) => candidate.url === url
+        );
+        if (activeTrack) {
+          activateMediaEnvelopeForTrigger(
+            { type: "song", trackId: activeTrack.name },
+            {
+              stationIndex: arrivingAt,
+              focusedAssetName: assetName
+            }
+          );
+        }
 
         audio.addEventListener("ended", () => {
           if (focusAudioElement !== audio) return;
@@ -6379,6 +7219,7 @@ const runtimeConfig = {
         for (const index of drawOrder) drawStation(index, now);
 
         if (threeRenderer && threeScene && threeCamera) {
+          updateActiveMediaEnvelope();
           const cam = cameraPosition();
           threeCamera.position.set(cam.x, cam.y, cam.z);
 

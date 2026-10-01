@@ -225,5 +225,7 @@
     "first-light-3.glb": {
       "type": "free"
     }
-  }
+  },
+  "mediaEnvelopePrograms": [],
+  "mediaEnvelopeBindings": []
 }
