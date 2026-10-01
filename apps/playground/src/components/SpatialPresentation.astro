@@ -5310,6 +5310,28 @@ const runtimeConfig = {
           activeCueLabels: new Set()
         };
 
+        const activatedEnvelope = activeMediaEnvelope;
+        if (program.lifecycle?.endOnMediaEnd) {
+          for (const tile of tiles) {
+            if (!tile.video || tile.video.loop) continue;
+            tile.video.addEventListener("ended", () => {
+              if (activeMediaEnvelope !== activatedEnvelope) return;
+              mediaEnvelopeOutsideRestoreAt =
+                performance.now() +
+                Math.max(0, Number(program.performance?.restoreOutsideAfterMs ?? 0));
+              disposeActiveMediaEnvelope();
+              window.dispatchEvent(new CustomEvent("webrev:media-envelope-media-ended", {
+                detail: {
+                  programId: program.id,
+                  mediaId: tile.mediaId,
+                  restoreOutsideAfterMs:
+                    Math.max(0, Number(program.performance?.restoreOutsideAfterMs ?? 0))
+                }
+              }));
+            }, { once: true });
+          }
+        }
+
         window.dispatchEvent(new CustomEvent("webrev:media-envelope-activated", {
           detail: mediaEnvelopeDebugState()
         }));
@@ -5577,6 +5599,20 @@ const runtimeConfig = {
             detail: { ...oversphereVideoSelectionPolicy }
           }));
           return { ...oversphereVideoSelectionPolicy };
+        },
+        getOversphereRadius() {
+          return defaultOversphereRadius;
+        },
+        setOversphereRadius(radius: number) {
+          const next = Number(radius);
+          if (!Number.isFinite(next) || next <= 0) {
+            throw new Error("Oversphere radius must be a positive number.");
+          }
+          defaultOversphereRadius = Math.max(2, next);
+          window.dispatchEvent(new CustomEvent("webrev:oversphere-radius", {
+            detail: { radius: defaultOversphereRadius }
+          }));
+          return defaultOversphereRadius;
         },
         getOversphereVideoHistory() {
           return {
@@ -6501,7 +6537,21 @@ const runtimeConfig = {
         return { showGlbs: false, maxGlbs: 0, representation: "glb" };
       }
 
+      function shouldCullStationForMediaEnvelope(index: number, now: number) {
+        if (index === arrivingAt) return false;
+
+        const active = activeMediaEnvelope;
+        if (active?.program.performance?.cullOutsideEnvelope) {
+          const center = stationCenter(index);
+          return mediaEnvelopeDistance(active.origin, center) > active.radius;
+        }
+
+        return now < mediaEnvelopeOutsideRestoreAt;
+      }
+
       function drawStation(index: number, now: number) {
+        if (shouldCullStationForMediaEnvelope(index, now)) return;
+
         const station = stations[index];
         const center = stationCenter(index);
         const cp = project(center);
