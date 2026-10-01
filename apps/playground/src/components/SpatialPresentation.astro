@@ -560,25 +560,30 @@ const runtimeConfig = {
 
   function normalizeWeightedResources(value: unknown): WeightedJourneyResource[] {
     if (!Array.isArray(value)) return [];
-    return value
-      .map((entry: any) => {
-        if (typeof entry === "string") return { id: entry, weight: 1 };
-        if (!entry || typeof entry.id !== "string" || !entry.id) return null;
-        const rawWeight = Number(entry.weight);
-        const rawProbability = Number(entry.probability);
-        return {
-          id: entry.id,
-          weight:
-            Number.isFinite(rawWeight) && rawWeight > 0
-              ? rawWeight
-              : 1,
-          probability:
-            Number.isFinite(rawProbability)
-              ? Math.max(0, Math.min(1, rawProbability))
-              : undefined
-        };
-      })
-      .filter((entry): entry is WeightedJourneyResource => Boolean(entry));
+    const result: WeightedJourneyResource[] = [];
+    for (const entry of value) {
+      if (typeof entry === "string") {
+        if (entry) result.push({ id: entry, weight: 1 });
+        continue;
+      }
+      if (!entry || typeof entry !== "object") continue;
+      const raw = entry as any;
+      if (typeof raw.id !== "string" || !raw.id) continue;
+      const rawWeight = Number(raw.weight);
+      const rawProbability = Number(raw.probability);
+      result.push({
+        id: raw.id,
+        weight:
+          Number.isFinite(rawWeight) && rawWeight > 0
+            ? rawWeight
+            : 1,
+        probability:
+          Number.isFinite(rawProbability)
+            ? Math.max(0, Math.min(1, rawProbability))
+            : undefined
+      });
+    }
+    return result;
   }
 
   function normalizeTransitionPolicy(value: any): TransitionResourcePolicy {
@@ -643,7 +648,7 @@ const runtimeConfig = {
     resources: WeightedJourneyResource[]
   ): string | null {
     const recent = new Set(
-      playedTrackHistory.slice(-Math.max(0, fallbackSongHistoryWindow))
+      playedTrackHistory.slice(-Math.max(0, transitionRecentHistoryWindow))
     );
     const nonRecent = resources.filter((entry) => !recent.has(entry.id));
     const candidates = nonRecent.length ? nonRecent : resources;
@@ -730,6 +735,7 @@ const runtimeConfig = {
       return policy.resources[index] ?? policy.resources[0] ?? null;
     }
 
+    if (policy.mode !== "pool") return null;
     const pool = journeyMusicEvolution.pools.find(
       (candidate) => candidate.id === policy.poolId
     );
@@ -738,6 +744,7 @@ const runtimeConfig = {
 
   // These live at presentation scope so the public API and the focused
   // journey runtime share one source of truth.
+  let transitionRecentHistoryWindow = 2;
   const playedTrackHistory: string[] = [];
   const playedTrackLedger = new Set<string>();
   let clearJourneyPlaneTrackHistoryFromApi = () => {};
@@ -754,7 +761,6 @@ const runtimeConfig = {
       glbCanvas.dataset.webglRecoveryBound = "true";
       glbCanvas.addEventListener("webglcontextlost", (event) => {
         event.preventDefault();
-        status && (status.textContent = "3D renderer paused · recovering graphics");
         window.dispatchEvent(new CustomEvent("webrev:webgl-context-lost"));
       });
       glbCanvas.addEventListener("webglcontextrestored", () => {
@@ -769,7 +775,6 @@ const runtimeConfig = {
         debugGlobes.clear();
         envelopeDebugGlobes.clear();
         ensureThree();
-        status && (status.textContent = "3D renderer restored");
         window.dispatchEvent(new CustomEvent("webrev:webgl-context-restored"));
       });
     }
@@ -1122,6 +1127,7 @@ const runtimeConfig = {
     }
 
     let fallbackSongHistoryWindow = loadFallbackSongHistoryWindow();
+    transitionRecentHistoryWindow = fallbackSongHistoryWindow;
 
     function loadAvoidCurrentPlaneSongs() {
       try {
@@ -2538,11 +2544,34 @@ const runtimeConfig = {
         saveUnpairedGlbLimits();
         return JSON.parse(JSON.stringify(normalized));
       },
+      getPlanePreviewPolicy(stationId?: string) {
+        if (stationId && planePreviewPolicies[stationId]) {
+          return JSON.parse(JSON.stringify(planePreviewPolicies[stationId]));
+        }
+        if (planePreviewPolicies.global) {
+          return JSON.parse(JSON.stringify(planePreviewPolicies.global));
+        }
+        return { showGlbs: true, maxGlbs: 2, representation: "glb" };
+      },
+      setPlanePreviewPolicy(
+        policy: Partial<PlanePreviewPolicy>,
+        stationId?: string
+      ) {
+        const key = stationId ?? "global";
+        const fallback =
+          planePreviewPolicies[key] ??
+          { showGlbs: true, maxGlbs: 2, representation: "glb" as const };
+        const normalized = normalizePlanePreviewPolicy(policy, fallback);
+        planePreviewPolicies[key] = normalized;
+        savePlanePreviewPolicies();
+        return JSON.parse(JSON.stringify(normalized));
+      },
       getFallbackSongHistoryWindow() {
         return fallbackSongHistoryWindow;
       },
       setFallbackSongHistoryWindow(count: number) {
         fallbackSongHistoryWindow = Math.max(0, Math.floor(Number(count) || 0));
+        transitionRecentHistoryWindow = fallbackSongHistoryWindow;
         try {
           window.localStorage.setItem(
             fallbackSongHistoryWindowStorageKey,
