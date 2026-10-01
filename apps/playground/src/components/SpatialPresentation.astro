@@ -694,6 +694,8 @@ const runtimeConfig = {
         getActiveMediaEnvelopeState(): MediaEnvelopeRuntimeState;
         getOversphereVideoSelectionPolicy(): OversphereVideoSelectionPolicy;
         setOversphereVideoSelectionPolicy(patch: Partial<OversphereVideoSelectionPolicy>): OversphereVideoSelectionPolicy;
+        getOversphereRadius(): number;
+        setOversphereRadius(radius: number): number;
         getOversphereVideoHistory(): {
           recent: string[];
           currentPlane: string[];
@@ -7281,7 +7283,7 @@ const runtimeConfig = {
         const activeTrack = trackCatalog().find(
           (candidate: { name: string; url: string }) => candidate.url === url
         );
-        if (activeTrack) {
+        if (activeTrack && focusExperience?.settled) {
           activateMediaEnvelopeForTrigger(
             { type: "song", trackId: activeTrack.name },
             {
@@ -7536,6 +7538,21 @@ const runtimeConfig = {
           if (!focusExperience.settled && now - focusExperience.startedAt >= 1450) {
             focusExperience.settled = true;
             fadeInFocusAudio();
+
+            const activeTrack = trackCatalog().find(
+              (candidate: { name: string; url: string }) =>
+                candidate.url === focusAudioSourceUrl
+            );
+            if (activeTrack) {
+              activateMediaEnvelopeForTrigger(
+                { type: "song", trackId: activeTrack.name },
+                {
+                  stationIndex: arrivingAt,
+                  focusedAssetName: focusExperience.object.name
+                }
+              );
+            }
+
             window.dispatchEvent(new CustomEvent("webrev:focus-experience-settled", {
               detail: {
                 stationId: activeStationId,
