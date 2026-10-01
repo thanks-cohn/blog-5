@@ -412,6 +412,8 @@ const runtimeConfig = {
         setUnpairedGlbLimit(limit: number, stationId?: string): number;
         getFallbackSongHistoryWindow(): number;
         setFallbackSongHistoryWindow(count: number): number;
+        getAvoidCurrentPlaneSongsForFallback(): boolean;
+        setAvoidCurrentPlaneSongsForFallback(enabled: boolean): boolean;
         getFocusPlaylist(): FocusPlaylistEntry[];
         setFocusPlaybackMode(mode: FocusPlaybackMode): PresentationSettingsSnapshot;
         setFocusPlaybackScope(scope: FocusPlaybackScope): PresentationSettingsSnapshot;
@@ -700,6 +702,7 @@ const runtimeConfig = {
     const journeyClickStartStorageKey = "webrev:journey-click-start:v1";
     const unpairedGlbLimitStorageKey = "webrev:unpaired-glb-limit:v1";
     const fallbackSongHistoryWindowStorageKey = "webrev:fallback-song-history-window:v1";
+    const avoidCurrentPlaneSongsStorageKey = "webrev:avoid-current-plane-songs:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
 
     function loadUnpairedGlbLimits() {
@@ -708,7 +711,7 @@ const runtimeConfig = {
         stored = JSON.parse(window.localStorage.getItem(unpairedGlbLimitStorageKey) ?? "{}");
       } catch {}
       return {
-        global: Math.max(0, Math.floor(Number(stored.global ?? 4))),
+        global: Math.max(0, Math.floor(Number(stored.global ?? 2))),
         ...stored
       };
     }
@@ -725,6 +728,16 @@ const runtimeConfig = {
     }
 
     let fallbackSongHistoryWindow = loadFallbackSongHistoryWindow();
+
+    function loadAvoidCurrentPlaneSongs() {
+      try {
+        const raw = window.localStorage.getItem(avoidCurrentPlaneSongsStorageKey);
+        if (raw === "true" || raw === "false") return raw === "true";
+      } catch {}
+      return true;
+    }
+
+    let avoidCurrentPlaneSongsForFallback = loadAvoidCurrentPlaneSongs();
 
     function resolvedUnpairedGlbLimit(stationId?: string) {
       const specific = stationId ? Number(unpairedGlbLimits[stationId]) : NaN;
@@ -807,6 +820,7 @@ const runtimeConfig = {
         focusPlaybackProgram: JSON.parse(JSON.stringify(focusPlaybackProgram ?? {})),
         unpairedGlbLimits: JSON.parse(JSON.stringify(unpairedGlbLimits ?? {})),
         fallbackSongHistoryWindow,
+        avoidCurrentPlaneSongsForFallback,
         journeyClickStart: journeyClickStartEnabled,
         positions
       };
@@ -2033,6 +2047,22 @@ const runtimeConfig = {
         }));
         return fallbackSongHistoryWindow;
       },
+      getAvoidCurrentPlaneSongsForFallback() {
+        return avoidCurrentPlaneSongsForFallback;
+      },
+      setAvoidCurrentPlaneSongsForFallback(enabled: boolean) {
+        avoidCurrentPlaneSongsForFallback = Boolean(enabled);
+        try {
+          window.localStorage.setItem(
+            avoidCurrentPlaneSongsStorageKey,
+            String(avoidCurrentPlaneSongsForFallback)
+          );
+        } catch {}
+        window.dispatchEvent(new CustomEvent("webrev:avoid-current-plane-songs", {
+          detail: { enabled: avoidCurrentPlaneSongsForFallback }
+        }));
+        return avoidCurrentPlaneSongsForFallback;
+      },
       getFocusPlaylist() {
         return resolvedFocusPlaylistForApi().map((entry) => ({ ...entry }));
       },
@@ -2832,6 +2862,7 @@ const runtimeConfig = {
         renderSphereSettings();
       });
       window.addEventListener("webrev:asset-station", () => {
+        fallbackTrackByPlaneAndAsset.clear();
         rebuildAssetLayouts();
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
@@ -2842,15 +2873,20 @@ const runtimeConfig = {
       window.addEventListener("webrev:asset-runtime-status", () => {
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
+      window.addEventListener("webrev:avoid-current-plane-songs", () => {
+        fallbackTrackByPlaneAndAsset.clear();
+      });
       window.addEventListener("webrev:fallback-song-history-window", () => {
         // Policy is evaluated at selection time, so no scene rebuild is needed.
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
       window.addEventListener("webrev:unpaired-glb-limit", () => {
+        fallbackTrackByPlaneAndAsset.clear();
         rebuildAssetLayouts();
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
       window.addEventListener("webrev:asset-focus-audio", () => {
+        fallbackTrackByPlaneAndAsset.clear();
         // Pairing/unpairing a GLB changes whether it participates in the live scene.
         // Rebuild immediately so Settings acts like an activation control.
         rebuildAssetLayouts();
@@ -4423,6 +4459,28 @@ const runtimeConfig = {
           .filter((obj: SceneObject) => obj.kind === "3d" && obj.visible !== false);
       }
 
+      const fallbackTrackByPlaneAndAsset = new Map<string, string>();
+
+      function pairedTrackNamesOnPlane(stationIndex = arrivingAt) {
+        const names = new Set<string>();
+        for (const obj of visiblePlaneGlbs(stationIndex)) {
+          const assigned =
+            assetFocusAudioState[obj.name]?.track ??
+            configuredAssetFocusTrack(obj.name);
+          if (assigned) names.add(assigned);
+        }
+        return names;
+      }
+
+      function fallbackTracksAlreadyUsedOnPlane(stationIndex = arrivingAt) {
+        const stationId = stations[stationIndex]?.id ?? "";
+        const names = new Set<string>();
+        for (const [key, track] of fallbackTrackByPlaneAndAsset) {
+          if (key.startsWith(`${stationId}::`)) names.add(track);
+        }
+        return names;
+      }
+
       function focusTrackForObject(obj: SceneObject) {
         if (!presentationSettings.focusAudio.enabled) return null;
 
@@ -4433,32 +4491,61 @@ const runtimeConfig = {
           assetFocusAudioState[obj.name]?.track ??
           configuredAssetFocusTrack(obj.name);
 
-        // A real pairing is authoritative. Recent-history avoidance is only
-        // for fallback selection on GLBs that do not have a fixed song.
+        // Fixed pairings stay authoritative.
         if (assigned) {
           return catalog.find(
             (track: { name: string; url: string }) => track.name === assigned
           ) ?? null;
         }
 
-        // Unpaired GLBs choose only from globally unassigned songs.
-        // First remove anything heard within the configured recent-history window.
+        // Unpaired GLBs only draw from globally unassigned songs.
         const fallbackPool = unassignedTracks();
         if (!fallbackPool.length) return null;
 
-        const recent = recentPlayedTrackNames();
-        const eligible = fallbackPool.filter(
-          (track: { name: string; url: string }) => !recent.has(track.name)
-        );
-        const candidates = eligible.length ? eligible : fallbackPool;
+        const stationId = stations[arrivingAt]?.id ?? "";
+        const cacheKey = `${stationId}::${obj.name}`;
+        const cachedName = fallbackTrackByPlaneAndAsset.get(cacheKey);
+        if (cachedName) {
+          const cached = fallbackPool.find(
+            (track: { name: string; url: string }) => track.name === cachedName
+          );
+          if (cached) return cached;
+          fallbackTrackByPlaneAndAsset.delete(cacheKey);
+        }
 
-        const planeObjects = visiblePlaneGlbs(arrivingAt);
-        const unpairedObjects = planeObjects.filter((candidate: SceneObject) => {
-          const candidateAssigned =
-            assetFocusAudioState[candidate.name]?.track ??
-            configuredAssetFocusTrack(candidate.name);
-          return !candidateAssigned;
-        });
+        const recent = recentPlayedTrackNames();
+        const planeSongs = avoidCurrentPlaneSongsForFallback
+          ? new Set<string>([
+              ...pairedTrackNamesOnPlane(arrivingAt),
+              ...fallbackTracksAlreadyUsedOnPlane(arrivingAt)
+            ])
+          : new Set<string>();
+
+        // Preferred pool: not recently heard and not already represented on this plane.
+        let candidates = fallbackPool.filter(
+          (track: { name: string; url: string }) =>
+            !recent.has(track.name) &&
+            !planeSongs.has(track.name)
+        );
+
+        // Relax plane uniqueness first, while still respecting recent-history avoidance.
+        if (!candidates.length) {
+          candidates = fallbackPool.filter(
+            (track: { name: string; url: string }) => !recent.has(track.name)
+          );
+        }
+
+        // Final graceful fallback stays inside the globally unassigned pool.
+        if (!candidates.length) candidates = fallbackPool;
+
+        const unpairedObjects = visiblePlaneGlbs(arrivingAt).filter(
+          (candidate: SceneObject) => {
+            const candidateAssigned =
+              assetFocusAudioState[candidate.name]?.track ??
+              configuredAssetFocusTrack(candidate.name);
+            return !candidateAssigned;
+          }
+        );
         const objectIndex = Math.max(
           0,
           unpairedObjects.findIndex(
@@ -4466,7 +4553,13 @@ const runtimeConfig = {
           )
         );
 
-        return candidates[objectIndex % candidates.length] ?? candidates[0] ?? null;
+        const chosen =
+          candidates[objectIndex % candidates.length] ??
+          candidates[0] ??
+          null;
+
+        if (chosen) fallbackTrackByPlaneAndAsset.set(cacheKey, chosen.name);
+        return chosen;
       }
 
       function planeJourneyEntries(stationIndex: number) {
