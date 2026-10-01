@@ -362,6 +362,13 @@ const runtimeConfig = {
     priority?: number;
   };
 
+  type OversphereVideoSelectionPolicy = {
+    avoidRecent: number;
+    avoidPreviousPlane: boolean;
+    pairingRequired: boolean;
+    selection: "random";
+  };
+
   type MediaEnvelopeRuntimeState = {
     active: boolean;
     bindingId?: string;
@@ -641,6 +648,15 @@ const runtimeConfig = {
         activateMediaEnvelope(programId: string, context?: Record<string, unknown>): boolean;
         deactivateMediaEnvelope(): void;
         getActiveMediaEnvelopeState(): MediaEnvelopeRuntimeState;
+        getOversphereVideoSelectionPolicy(): OversphereVideoSelectionPolicy;
+        setOversphereVideoSelectionPolicy(patch: Partial<OversphereVideoSelectionPolicy>): OversphereVideoSelectionPolicy;
+        getOversphereVideoHistory(): {
+          recent: string[];
+          currentPlane: string[];
+          previousPlane: string[];
+          stationId: string | null;
+        };
+        clearOversphereVideoHistory(): void;
         getSpatialEnvelope(name: string): SpatialEnvelopeConfig | null;
         setSpatialEnvelope(name: string, patch: Partial<SpatialEnvelopeConfig>): void;
         setEnvelopeDebug(name: string, visible: boolean): void;
@@ -1250,6 +1266,17 @@ const runtimeConfig = {
     };
 
     let activeMediaEnvelope: ActiveMediaEnvelope | null = null;
+
+    let oversphereVideoSelectionPolicy: OversphereVideoSelectionPolicy = {
+      avoidRecent: 2,
+      avoidPreviousPlane: true,
+      pairingRequired: false,
+      selection: "random"
+    };
+    let oversphereRecentVideoIds: string[] = [];
+    let oversphereCurrentPlaneVideoIds: string[] = [];
+    let overspherePreviousPlaneVideoIds: string[] = [];
+    let oversphereHistoryStationId: string | null = null;
 
     function loadUnpairedGlbLimits() {
       let stored: Record<string, unknown> = {};
@@ -4809,6 +4836,200 @@ const runtimeConfig = {
         window.dispatchEvent(new CustomEvent("webrev:media-envelope-deactivated"));
       }
 
+      function oversphereVideoCatalog() {
+        const videos = Array.isArray(config.oversphereVideos)
+          ? config.oversphereVideos
+          : [];
+        return videos
+          .filter((entry: any) =>
+            entry &&
+            typeof entry.id === "string" &&
+            typeof entry.url === "string" &&
+            entry.id &&
+            entry.url
+          )
+          .map((entry: any) => ({
+            id: String(entry.id),
+            name: String(entry.name ?? entry.id),
+            url: String(entry.url)
+          }));
+      }
+
+      function normalizeOversphereVideoSelectionPolicy(
+        value: Partial<OversphereVideoSelectionPolicy> | undefined
+      ): OversphereVideoSelectionPolicy {
+        return {
+          avoidRecent: Math.max(
+            0,
+            Math.floor(
+              Number(value?.avoidRecent ?? oversphereVideoSelectionPolicy.avoidRecent) || 0
+            )
+          ),
+          avoidPreviousPlane:
+            typeof value?.avoidPreviousPlane === "boolean"
+              ? value.avoidPreviousPlane
+              : oversphereVideoSelectionPolicy.avoidPreviousPlane,
+          pairingRequired:
+            typeof value?.pairingRequired === "boolean"
+              ? value.pairingRequired
+              : oversphereVideoSelectionPolicy.pairingRequired,
+          selection: "random"
+        };
+      }
+
+      function beginOverspherePlaneHistory(stationIndex: number) {
+        const stationId = String(stations[stationIndex]?.id ?? "");
+        if (!stationId) return;
+        if (oversphereHistoryStationId === stationId) return;
+
+        if (oversphereHistoryStationId !== null) {
+          overspherePreviousPlaneVideoIds = [...new Set(oversphereCurrentPlaneVideoIds)];
+        }
+        oversphereCurrentPlaneVideoIds = [];
+        oversphereHistoryStationId = stationId;
+      }
+
+      function selectDefaultOversphereVideo(stationIndex: number) {
+        const videos = oversphereVideoCatalog();
+        if (!videos.length) return null;
+
+        beginOverspherePlaneHistory(stationIndex);
+
+        const recentWindow = Math.min(
+          Math.max(0, oversphereVideoSelectionPolicy.avoidRecent),
+          Math.max(0, videos.length - 1)
+        );
+        const recentBlocked = new Set(
+          oversphereRecentVideoIds.slice(-recentWindow)
+        );
+
+        let candidates = videos.filter((video: any) => !recentBlocked.has(video.id));
+        if (!candidates.length) candidates = [...videos];
+
+        if (
+          oversphereVideoSelectionPolicy.avoidPreviousPlane &&
+          overspherePreviousPlaneVideoIds.length
+        ) {
+          const previousBlocked = new Set(overspherePreviousPlaneVideoIds);
+          const withoutPreviousPlane = candidates.filter(
+            (video: any) => !previousBlocked.has(video.id)
+          );
+          // Previous-plane exclusion is a preference, not a dead end. Relax it
+          // only when the available pool cannot satisfy the rule.
+          if (withoutPreviousPlane.length) candidates = withoutPreviousPlane;
+        }
+
+        const selected =
+          candidates[Math.floor(Math.random() * candidates.length)] ??
+          videos[0] ??
+          null;
+        if (!selected) return null;
+
+        oversphereRecentVideoIds.push(selected.id);
+        const historyLimit = Math.max(
+          8,
+          oversphereVideoSelectionPolicy.avoidRecent + videos.length * 2
+        );
+        if (oversphereRecentVideoIds.length > historyLimit) {
+          oversphereRecentVideoIds = oversphereRecentVideoIds.slice(-historyLimit);
+        }
+        oversphereCurrentPlaneVideoIds.push(selected.id);
+
+        window.dispatchEvent(new CustomEvent("webrev:oversphere-video-selected", {
+          detail: {
+            stationId: oversphereHistoryStationId,
+            videoId: selected.id,
+            recentExcluded: [...recentBlocked],
+            previousPlaneExcluded:
+              oversphereVideoSelectionPolicy.avoidPreviousPlane
+                ? [...overspherePreviousPlaneVideoIds]
+                : [],
+            candidates: candidates.map((entry: any) => entry.id)
+          }
+        }));
+
+        return selected;
+      }
+
+      function activateDefaultOversphereForSong(
+        trigger: Extract<MediaEnvelopeTrigger, { type: "song" }>,
+        context: Record<string, unknown>
+      ) {
+        if (oversphereVideoSelectionPolicy.pairingRequired) return false;
+
+        const stationIndex = Math.max(
+          0,
+          Math.min(
+            stations.length - 1,
+            Number.isFinite(Number(context.stationIndex))
+              ? Number(context.stationIndex)
+              : arrivingAt
+          )
+        );
+        const selected = selectDefaultOversphereVideo(stationIndex);
+        const programId = "__default-oversphere-video__";
+        const program: MediaEnvelopeProgram = {
+          id: programId,
+          envelope: {
+            shape: "sphere",
+            origin: { mode: "focused-object" },
+            growth: {
+              mode: "timed",
+              durationMs: 1200,
+              easing: "easeOutCubic"
+            }
+          },
+          coverage: {
+            include: ["current-main-panel", "next-main-panel"],
+            padding: 3,
+            panelAllowance: 4,
+            minRadius: 10
+          },
+          surface: {
+            side: "inside",
+            orientation: { mode: "upright-to-world" }
+          },
+          protectedRegions: [
+            {
+              target: "current-main-panel",
+              mode: "avoid",
+              angularRadiusDeg: 18
+            },
+            {
+              target: "next-main-panel",
+              mode: "avoid",
+              angularRadiusDeg: 18
+            }
+          ],
+          layout: {
+            mode: "hero",
+            rows: 1,
+            columns: 1,
+            horizontalArcDeg: 64,
+            verticalArcDeg: 40,
+            gapDeg: 0,
+            tileAngularWidthDeg: 56,
+            tileAngularHeightDeg: 34
+          },
+          media: selected
+            ? [{
+                id: selected.id,
+                type: "video",
+                src: selected.url,
+                loop: true,
+                muted: true,
+                opacity: 1
+              }]
+            : []
+        };
+        mediaEnvelopePrograms.set(programId, program);
+        return activateMediaEnvelopeInternal(
+          programId,
+          { ...context, trigger },
+          "__default-oversphere-song-fallback__"
+        );
+      }
+
       function mediaEnvelopeDebugState(): MediaEnvelopeRuntimeState {
         const active = activeMediaEnvelope;
         if (!active) return { active: false };
@@ -5003,12 +5224,17 @@ const runtimeConfig = {
           })
           .sort((a, b) => Number(b.priority ?? 0) - Number(a.priority ?? 0));
         const binding = matches[0];
-        if (!binding) return false;
-        return activateMediaEnvelopeInternal(
-          binding.programId,
-          { ...context, trigger },
-          binding.id
-        );
+        if (binding) {
+          return activateMediaEnvelopeInternal(
+            binding.programId,
+            { ...context, trigger },
+            binding.id
+          );
+        }
+        if (trigger.type === "song") {
+          return activateDefaultOversphereForSong(trigger, context);
+        }
+        return false;
       }
 
       function updateActiveMediaEnvelope() {
@@ -5226,6 +5452,34 @@ const runtimeConfig = {
         },
         getActiveMediaEnvelopeState() {
           return mediaEnvelopeDebugState();
+        },
+        getOversphereVideoSelectionPolicy() {
+          return { ...oversphereVideoSelectionPolicy };
+        },
+        setOversphereVideoSelectionPolicy(
+          patch: Partial<OversphereVideoSelectionPolicy>
+        ) {
+          oversphereVideoSelectionPolicy =
+            normalizeOversphereVideoSelectionPolicy(patch);
+          window.dispatchEvent(new CustomEvent("webrev:oversphere-video-policy", {
+            detail: { ...oversphereVideoSelectionPolicy }
+          }));
+          return { ...oversphereVideoSelectionPolicy };
+        },
+        getOversphereVideoHistory() {
+          return {
+            recent: [...oversphereRecentVideoIds],
+            currentPlane: [...oversphereCurrentPlaneVideoIds],
+            previousPlane: [...overspherePreviousPlaneVideoIds],
+            stationId: oversphereHistoryStationId
+          };
+        },
+        clearOversphereVideoHistory() {
+          oversphereRecentVideoIds = [];
+          oversphereCurrentPlaneVideoIds = [];
+          overspherePreviousPlaneVideoIds = [];
+          oversphereHistoryStationId = null;
+          window.dispatchEvent(new CustomEvent("webrev:oversphere-video-history-cleared"));
         }
       });
 
