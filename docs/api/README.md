@@ -1280,16 +1280,34 @@ interface WebRevDebugApiV1 {
   getRendererDebugState(): object;
   getAudioDebugState(): object;
   getRandomizationDebugState(): object;
+  getGlbSelectionDebugState(stationId?: string): object | null;
 }
 ```
 
-The snapshot currently includes capture time/route/viewport; every plane and its identity/center/navigation flags/preview policy/resource residency/random sample; every layout object with local/world/latest-screen position, size/spin/hemisphere/visibility, motion/anchor/envelope/bounds, focus/audio/exclusion and GLB load/residency data; camera pose/target/arrival; derived travel state; journey cursor/counters/residency/pending entry; audio element and history; randomization policy/history; and renderer counts/context status.
+The snapshot currently includes capture time/route/viewport; every plane and its identity/center/navigation flags/preview policy/resource residency/random sample; every layout object with local/world/latest-screen position, size/spin/hemisphere/visibility, motion/anchor/envelope/bounds, focus/audio/exclusion and GLB load/residency data; camera pose/target/arrival; derived travel state; journey cursor/counters/residency/pending entry; audio element and history; randomization policy/history; GLB selection-decision traces; and renderer counts/context status.
+
+### GLB selection explanation trace
+
+`getGlbSelectionDebugState(stationId?)` returns the current plane's read-only explanation record for randomized GLB population. The same records are available under `getDebugSnapshot().randomization.glbSelectionDecisions`.
+
+Each record includes:
+
+- the resolved unpaired-count policy and target count
+- every discovered GLB with its assigned station, saved focus track, pairing state, random-pool eligibility, hemisphere, and visibility
+- GLBs assigned to the plane and paired GLBs guaranteed by current semantics
+- the global unpaired candidate pool
+- prior-plane history used by diversity rules
+- candidate sets before diversity filtering, after within-run filtering, after adjacent-plane filtering, and in the fallback pool
+- the final randomized GLBs selected for that plane
+- a short explanation of the current pairing-to-random-pool rule
+
+This is deliberately observational. It does not reroll, repair, reassign, pair, or otherwise mutate presentation state.
 
 ### Current limitations (do not infer these fields)
 
 * Revision/build identity is available from `/.well-known/webrev.json`, not yet joined into the live snapshot.
 * “Rendered last frame” means a visible object has a retained `lastScreen`; it is not a frame-numbered GPU draw receipt. Screen bounds are radius-based, not an exact projected GLB box.
-* Main-image/text load failures, last context loss/restore timestamps, stale GPU count, travel source/initiator/progress, fade progress, unheard candidates, resolver candidate/exclusion trace, authored-vs-storage provenance per field, and custom-travel in-flight state are not yet captured.
+* Main-image/text load failures, last context loss/restore timestamps, stale GPU count, travel source/initiator/progress, fade progress, unheard song candidates, song/transition resolver candidate/exclusion traces, authored-vs-storage provenance per field, and custom-travel in-flight state are not yet captured. GLB population selection is now traced separately.
 * No `subscribeDebug` exists yet; callers poll or listen to the event inventory. No authorization boundary exists, so the snapshot intentionally excludes secrets and write operations.
 
 ### Proposed versioned target (not implemented)
@@ -1306,7 +1324,7 @@ A future schema v2 should add stable `build/revision`, per-value `{value,source}
 | Music | Pairing, exclusions, fallback history, transition probability/weight pools | Nested playlists, conditions/modifiers/branches/explanation ledger |
 | Manifest | Presentation schema 2 config plus schema-1 style export | Validated portable import/publish manifest and migrations |
 | Rendering | Canvas + isolated Three resources, status events | Exact frame graph, stale-resource accounting, environment spheres |
-| Debug | Read-only `webrevDebug` schema 1 | Subscription, provenance, decision traces, auth/redaction policy |
+| Debug | Read-only `webrevDebug` schema 1 with GLB population decision traces | Subscription, broader song/transition provenance and decision traces, auth/redaction policy |
 | Karaoke/effects | None in live renderer | Portable timed-performance format, warped credit plane, segment effects |
 
 # 26. Known mismatches and technical debt
@@ -1320,7 +1338,7 @@ A future schema v2 should add stable `build/revision`, per-value `{value,source}
 7. `representation:"icon"` is accepted without a complete distinct rendering contract.
 8. Persistent browser overrides can supersede changed code/config indefinitely; only placement v3 documents intentional invalidation, and there is no user-visible provenance/migration report.
 9. Proposed orchestration syntax and seven-scope precedence are not an implementation contract. Current transition pools provide only a small subset.
-10. Deep Debug v1 is renderer-local and read-only by design, but lacks subscription, revision join, exact draw receipts and detailed resolver explanations.
+10. Deep Debug v1 is renderer-local and read-only by design. GLB population now exposes detailed candidate/filter/selection explanations, but subscription, revision join, exact draw receipts, and equivalent song/transition resolver explanations are still missing.
 
 # 27. Source-of-truth map and recommended next step
 
