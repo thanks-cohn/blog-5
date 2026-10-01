@@ -5160,6 +5160,10 @@ const runtimeConfig = {
           }
           tile.mesh?.geometry?.dispose?.();
           disposeMaterial(tile.material);
+          tile.videoTexture?.dispose?.();
+          if (tile.diagnosticTexture && tile.diagnosticTexture !== tile.texture) {
+            tile.diagnosticTexture.dispose?.();
+          }
           tile.texture?.dispose?.();
         }
         active.group?.parent?.remove?.(active.group);
@@ -5399,7 +5403,8 @@ const runtimeConfig = {
             duration: Number.isFinite(tile.video.duration) ? tile.video.duration : null,
             videoWidth: tile.video.videoWidth,
             videoHeight: tile.video.videoHeight,
-            currentSrc: tile.video.currentSrc || tile.video.src || null
+            currentSrc: tile.video.currentSrc || tile.video.src || null,
+            usingVideoTexture: tile.material?.map === tile.videoTexture
           };
         }
 
@@ -5591,11 +5596,24 @@ const runtimeConfig = {
           );
           mesh.renderOrder = foreground ? 9000 : -10;
           group.add(mesh);
+
+          if (created.video && created.videoTexture) {
+            const revealVideoTexture = () => {
+              if (!created.video || created.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+              material.map = created.videoTexture;
+              material.needsUpdate = true;
+            };
+            created.video.addEventListener("loadeddata", revealVideoTexture);
+            created.video.addEventListener("playing", revealVideoTexture);
+          }
+
           tiles.push({
             mediaId: source.id,
             mesh,
             material,
             texture: created.texture,
+            videoTexture: created.videoTexture,
+            diagnosticTexture: created.diagnosticTexture,
             video: created.video,
             sourceUrl: created.sourceUrl,
             videoState: created.videoState,
