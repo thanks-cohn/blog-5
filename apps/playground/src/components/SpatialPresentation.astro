@@ -428,6 +428,8 @@ const runtimeConfig = {
         setUnpairedGlbLimit(limit: UnpairedGlbCountPolicy, stationId?: string): UnpairedGlbCountPolicy;
         getFallbackSongHistoryWindow(): number;
         setFallbackSongHistoryWindow(count: number): number;
+        getPlayedTrackHistory(): { recent: string[]; played: string[]; unheard: string[] };
+        clearPlayedTrackHistory(): void;
         getAvoidCurrentPlaneSongsForFallback(): boolean;
         setAvoidCurrentPlaneSongsForFallback(enabled: boolean): boolean;
         getFocusPlaylist(): FocusPlaylistEntry[];
@@ -2165,6 +2167,22 @@ const runtimeConfig = {
           detail: { count: fallbackSongHistoryWindow }
         }));
         return fallbackSongHistoryWindow;
+      },
+      getPlayedTrackHistory() {
+        const catalog = trackCatalog().map((track) => track.name);
+        return {
+          recent: playedTrackHistory.slice(-fallbackSongHistoryWindow),
+          played: catalog.filter((name) => playedTrackLedger.has(name)),
+          unheard: catalog.filter((name) => !playedTrackLedger.has(name))
+        };
+      },
+      clearPlayedTrackHistory() {
+        playedTrackHistory.length = 0;
+        playedTrackLedger.clear();
+        journeyPlanePlayedTracks.clear();
+        window.dispatchEvent(new CustomEvent("webrev:played-track-history", {
+          detail: { recent: [], played: [], unheard: trackCatalog().map((track) => track.name) }
+        }));
       },
       getAvoidCurrentPlaneSongsForFallback() {
         return avoidCurrentPlaneSongsForFallback;
@@ -4511,6 +4529,7 @@ const runtimeConfig = {
       let focusAudioSourceUrl = "";
       let focusAudioCurrentAssetName = "";
       const playedTrackHistory: string[] = [];
+      const playedTrackLedger = new Set<string>();
 
       function rememberPlayedTrack(url: string) {
         const track = trackCatalog().find(
@@ -4518,6 +4537,7 @@ const runtimeConfig = {
         );
         if (!track) return;
         playedTrackHistory.push(track.name);
+        playedTrackLedger.add(track.name);
         const keep = Math.max(32, fallbackSongHistoryWindow + 16);
         if (playedTrackHistory.length > keep) {
           playedTrackHistory.splice(0, playedTrackHistory.length - keep);
@@ -4527,6 +4547,14 @@ const runtimeConfig = {
       function recentPlayedTrackNames() {
         if (fallbackSongHistoryWindow <= 0) return new Set<string>();
         return new Set(playedTrackHistory.slice(-fallbackSongHistoryWindow));
+      }
+
+      function unheardTrackNames() {
+        return new Set(
+          trackCatalog()
+            .map((track) => track.name)
+            .filter((name) => !playedTrackLedger.has(name))
+        );
       }
 
       function historyEligibleTracks(
@@ -4743,21 +4771,39 @@ const runtimeConfig = {
               ...journeyPlanePlayedTracks
             ])
           : new Set<string>();
+        const unheard = unheardTrackNames();
 
+        // Tier 1: prefer genuinely new music while still respecting the two
+        // strongest variety constraints: recent-history and current-plane reuse.
         let candidates = fallbackPool.filter(
           (track: { name: string; url: string }) =>
+            unheard.has(track.name) &&
             !recent.has(track.name) &&
             !planeSongs.has(track.name)
         );
 
-        // Relax plane uniqueness before relaxing recent-history avoidance.
+        // Tier 2: once the unheard pool is exhausted, allow previously heard
+        // music but still enforce recent-history and current-plane avoidance.
+        if (!candidates.length) {
+          candidates = fallbackPool.filter(
+            (track: { name: string; url: string }) =>
+              !recent.has(track.name) &&
+              !planeSongs.has(track.name)
+          );
+        }
+
+        // If the catalog is too small for both minimum constraints, degrade
+        // gracefully while never leaving the globally unassigned/object-safe pool.
         if (!candidates.length) {
           candidates = fallbackPool.filter(
             (track: { name: string; url: string }) => !recent.has(track.name)
           );
         }
-
-        // Final fallback remains inside the globally unassigned pool.
+        if (!candidates.length) {
+          candidates = fallbackPool.filter(
+            (track: { name: string; url: string }) => !planeSongs.has(track.name)
+          );
+        }
         if (!candidates.length) candidates = fallbackPool;
 
         return candidates[Math.floor(Math.random() * candidates.length)] ?? null;
