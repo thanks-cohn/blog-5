@@ -269,6 +269,11 @@ const runtimeConfig = {
     | number
     | "all"
     | { mode: "range"; min: number; max: number };
+  type PlanePreviewPolicy = {
+    showGlbs: boolean;
+    maxGlbs: number | "all";
+    representation?: "glb" | "icon";
+  };
   type PlaneResidencyPolicy =
     | { mode: "cycles"; value: number }
     | { mode: "songs"; value: number }
@@ -426,6 +431,8 @@ const runtimeConfig = {
         removeAssetTrackExclusion(name: string, track: string): string[];
         getUnpairedGlbLimit(stationId?: string): UnpairedGlbCountPolicy;
         setUnpairedGlbLimit(limit: UnpairedGlbCountPolicy, stationId?: string): UnpairedGlbCountPolicy;
+        getPlanePreviewPolicy(stationId?: string): PlanePreviewPolicy;
+        setPlanePreviewPolicy(policy: Partial<PlanePreviewPolicy>, stationId?: string): PlanePreviewPolicy;
         getFallbackSongHistoryWindow(): number;
         setFallbackSongHistoryWindow(count: number): number;
         getPlayedTrackHistory(): { recent: string[]; played: string[]; unheard: string[] };
@@ -803,6 +810,7 @@ const runtimeConfig = {
     const styleExplorationStorageKey = "webrev:style-exploration:v1";
     const journeyClickStartStorageKey = "webrev:journey-click-start:v1";
     const unpairedGlbLimitStorageKey = "webrev:unpaired-glb-limit:v2";
+    const planePreviewPolicyStorageKey = "webrev:plane-preview-policy:v1";
     const fallbackSongHistoryWindowStorageKey = "webrev:fallback-song-history-window:v1";
     const avoidCurrentPlaneSongsStorageKey = "webrev:avoid-current-plane-songs:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
@@ -839,6 +847,56 @@ const runtimeConfig = {
     }
 
     let unpairedGlbLimits: Record<string, UnpairedGlbCountPolicy> = loadUnpairedGlbLimits();
+
+    function normalizePlanePreviewPolicy(
+      value: Partial<PlanePreviewPolicy> | undefined,
+      fallback: PlanePreviewPolicy
+    ): PlanePreviewPolicy {
+      const max =
+        value?.maxGlbs === "all"
+          ? "all"
+          : Math.max(0, Math.floor(Number(value?.maxGlbs ?? fallback.maxGlbs) || 0));
+      return {
+        showGlbs:
+          typeof value?.showGlbs === "boolean"
+            ? value.showGlbs
+            : fallback.showGlbs,
+        maxGlbs: max,
+        representation: value?.representation === "icon" ? "icon" : "glb"
+      };
+    }
+
+    function loadPlanePreviewPolicies() {
+      let stored: Record<string, Partial<PlanePreviewPolicy>> = {};
+      try {
+        stored = JSON.parse(
+          window.localStorage.getItem(planePreviewPolicyStorageKey) ?? "{}"
+        );
+      } catch {}
+      const result: Record<string, PlanePreviewPolicy> = {};
+      for (const [key, value] of Object.entries(stored ?? {})) {
+        result[key] = normalizePlanePreviewPolicy(
+          value,
+          { showGlbs: false, maxGlbs: 0, representation: "glb" }
+        );
+      }
+      return result;
+    }
+
+    let planePreviewPolicies: Record<string, PlanePreviewPolicy> =
+      loadPlanePreviewPolicies();
+
+    function savePlanePreviewPolicies() {
+      try {
+        window.localStorage.setItem(
+          planePreviewPolicyStorageKey,
+          JSON.stringify(planePreviewPolicies)
+        );
+      } catch {}
+      window.dispatchEvent(new CustomEvent("webrev:plane-preview-policy", {
+        detail: JSON.parse(JSON.stringify(planePreviewPolicies))
+      }));
+    }
 
     function loadFallbackSongHistoryWindow() {
       try {
@@ -4538,6 +4596,23 @@ const runtimeConfig = {
         for (const globe of envelopeDebugGlobes.values()) globe.visible = false;
       }
 
+      function resolvedPlanePreviewPolicy(index: number): PlanePreviewPolicy {
+        const stationId = stations[index]?.id;
+        if (stationId && planePreviewPolicies[stationId]) {
+          return planePreviewPolicies[stationId];
+        }
+        if (planePreviewPolicies.global) return planePreviewPolicies.global;
+
+        // Default distance policy:
+        // current plane = full scene (handled by drawStation)
+        // immediately next plane = image + two GLB previews
+        // every farther plane = image only
+        if (index === arrivingAt + 1) {
+          return { showGlbs: true, maxGlbs: 2, representation: "glb" };
+        }
+        return { showGlbs: false, maxGlbs: 0, representation: "glb" };
+      }
+
       function drawStation(index: number, now: number) {
         const station = stations[index];
         const center = stationCenter(index);
@@ -4547,7 +4622,30 @@ const runtimeConfig = {
         const alpha = Math.max(.12, Math.min(1, 1 - cp.depth / 60));
         const current = index === arrivingAt;
 
-        for (const obj of layouts[index]) drawSceneObject(center, obj, alpha * .84, now);
+        const stationObjects = layouts[index] ?? [];
+        if (current) {
+          for (const obj of stationObjects) {
+            drawSceneObject(center, obj, alpha * .84, now);
+          }
+        } else {
+          const preview = resolvedPlanePreviewPolicy(index);
+          if (preview.showGlbs && preview.representation !== "icon") {
+            const glbs = stationObjects.filter(
+              (obj: SceneObject) =>
+                obj.kind === "3d" &&
+                obj.visible !== false
+            );
+            const count =
+              preview.maxGlbs === "all"
+                ? glbs.length
+                : Math.max(0, Math.floor(Number(preview.maxGlbs) || 0));
+            for (const obj of glbs.slice(0, count)) {
+              drawSceneObject(center, obj, alpha * .84, now);
+            }
+          }
+          // "icon" is intentionally reserved for the future lightweight
+          // 2D-icon/GLB pairing system. Until then, icon mode means image-only.
+        }
 
         // The main image is now a real 3D plane and the plaque is its child.
         const imageEntry = ensureMainImagePlane(station, center);
