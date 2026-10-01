@@ -105,6 +105,10 @@
     "assetNamingRule": "Assets are assigned by artworkName prefix. Any non-empty unique suffix is valid; numeric suffixes are optional.",
     "mainImage": {
       "displayAsFloatingObject": false
+    },
+    "textPlane": {
+      "enabled": true,
+      "color": "#f3b6c8"
     }
   },
   "stations": [
