@@ -265,6 +265,10 @@ const runtimeConfig = {
   type FocusPlaybackScope = "station" | "all";
   type FocusPlaybackOrder = "ordered" | "random";
   type PlaneTravelMode = "teleport" | "roller-coaster" | "custom";
+  type UnpairedGlbCountPolicy =
+    | number
+    | "all"
+    | { mode: "range"; min: number; max: number };
   type PlaneResidencyPolicy =
     | { mode: "cycles"; value: number }
     | { mode: "songs"; value: number }
@@ -420,8 +424,8 @@ const runtimeConfig = {
         setAssetTrackExclusions(name: string, tracks: string[]): string[];
         addAssetTrackExclusion(name: string, track: string): string[];
         removeAssetTrackExclusion(name: string, track: string): string[];
-        getUnpairedGlbLimit(stationId?: string): number | "all";
-        setUnpairedGlbLimit(limit: number | "all", stationId?: string): number | "all";
+        getUnpairedGlbLimit(stationId?: string): UnpairedGlbCountPolicy;
+        setUnpairedGlbLimit(limit: UnpairedGlbCountPolicy, stationId?: string): UnpairedGlbCountPolicy;
         getFallbackSongHistoryWindow(): number;
         setFallbackSongHistoryWindow(count: number): number;
         getAvoidCurrentPlaneSongsForFallback(): boolean;
@@ -727,22 +731,37 @@ const runtimeConfig = {
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
 
     function loadUnpairedGlbLimits() {
-      let stored: Record<string, number> = {};
+      let stored: Record<string, unknown> = {};
       try {
         stored = JSON.parse(window.localStorage.getItem(unpairedGlbLimitStorageKey) ?? "{}");
       } catch {}
-      const normalized: Record<string, number | "all"> = {};
+      const normalized: Record<string, UnpairedGlbCountPolicy> = {};
       for (const [key, value] of Object.entries(stored ?? {})) {
-        normalized[key] =
-          value === "all"
-            ? "all"
-            : Math.max(0, Math.floor(Number(value) || 0));
+        if (value === "all") {
+          normalized[key] = "all";
+          continue;
+        }
+        if (
+          value &&
+          typeof value === "object" &&
+          (value as any).mode === "range"
+        ) {
+          const rawMin = Math.max(0, Math.floor(Number((value as any).min) || 0));
+          const rawMax = Math.max(0, Math.floor(Number((value as any).max) || 0));
+          normalized[key] = {
+            mode: "range",
+            min: Math.min(rawMin, rawMax),
+            max: Math.max(rawMin, rawMax)
+          };
+          continue;
+        }
+        normalized[key] = Math.max(0, Math.floor(Number(value) || 0));
       }
       if (!("global" in normalized)) normalized.global = 2;
       return normalized;
     }
 
-    let unpairedGlbLimits: Record<string, number | "all"> = loadUnpairedGlbLimits();
+    let unpairedGlbLimits: Record<string, UnpairedGlbCountPolicy> = loadUnpairedGlbLimits();
 
     function loadFallbackSongHistoryWindow() {
       try {
@@ -765,17 +784,37 @@ const runtimeConfig = {
 
     let avoidCurrentPlaneSongsForFallback = loadAvoidCurrentPlaneSongs();
 
-    function resolvedUnpairedGlbLimit(stationId?: string) {
-      const specific = stationId ? unpairedGlbLimits[stationId] : undefined;
-      if (specific === "all") return "all" as const;
-      const specificNumber = Number(specific);
-      if (Number.isFinite(specificNumber)) {
-        return Math.max(0, Math.floor(specificNumber));
+    function normalizeUnpairedGlbPolicy(
+      value: UnpairedGlbCountPolicy
+    ): UnpairedGlbCountPolicy {
+      if (value === "all") return "all";
+      if (typeof value === "number") {
+        return Math.max(0, Math.floor(Number(value) || 0));
       }
+      const rawMin = Math.max(0, Math.floor(Number(value?.min) || 0));
+      const rawMax = Math.max(0, Math.floor(Number(value?.max) || 0));
+      return {
+        mode: "range",
+        min: Math.min(rawMin, rawMax),
+        max: Math.max(rawMin, rawMax)
+      };
+    }
 
-      const global = unpairedGlbLimits.global ?? 2;
-      if (global === "all") return "all" as const;
-      return Math.max(0, Math.floor(Number(global) || 0));
+    function resolvedUnpairedGlbLimit(stationId?: string): UnpairedGlbCountPolicy {
+      const specific = stationId ? unpairedGlbLimits[stationId] : undefined;
+      if (specific != null) return normalizeUnpairedGlbPolicy(specific);
+      return normalizeUnpairedGlbPolicy(unpairedGlbLimits.global ?? 2);
+    }
+
+    function resolveUnpairedGlbCount(
+      policy: UnpairedGlbCountPolicy,
+      rand: () => number
+    ) {
+      if (policy === "all") return "all" as const;
+      if (typeof policy === "number") return policy;
+      const min = Math.max(0, Math.floor(policy.min));
+      const max = Math.max(min, Math.floor(policy.max));
+      return min + Math.floor(rand() * (max - min + 1));
     }
 
     function saveUnpairedGlbLimits() {
@@ -2102,15 +2141,12 @@ const runtimeConfig = {
       getUnpairedGlbLimit(stationId?: string) {
         return resolvedUnpairedGlbLimit(stationId);
       },
-      setUnpairedGlbLimit(limit: number | "all", stationId?: string) {
-        const normalized =
-          limit === "all"
-            ? "all"
-            : Math.max(0, Math.floor(Number(limit) || 0));
+      setUnpairedGlbLimit(limit: UnpairedGlbCountPolicy, stationId?: string) {
+        const normalized = normalizeUnpairedGlbPolicy(limit);
         if (stationId) unpairedGlbLimits[stationId] = normalized;
         else unpairedGlbLimits.global = normalized;
         saveUnpairedGlbLimits();
-        return normalized;
+        return JSON.parse(JSON.stringify(normalized));
       },
       getFallbackSongHistoryWindow() {
         return fallbackSongHistoryWindow;
@@ -3333,7 +3369,8 @@ const runtimeConfig = {
           return !pairedTrack;
         });
 
-        const unpairedLimit = resolvedUnpairedGlbLimit(station.id);
+        const unpairedPolicy = resolvedUnpairedGlbLimit(station.id);
+        const unpairedLimit = resolveUnpairedGlbCount(unpairedPolicy, rand);
         const shuffledUnpaired = [...unpaired3d];
         for (let i = shuffledUnpaired.length - 1; i > 0; i--) {
           const j = Math.floor(rand() * (i + 1));
