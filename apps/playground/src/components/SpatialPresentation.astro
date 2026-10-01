@@ -1311,6 +1311,8 @@ const runtimeConfig = {
       mesh: any;
       material: any;
       texture: any;
+      videoTexture?: any;
+      diagnosticTexture?: any;
       video?: HTMLVideoElement;
       sourceUrl?: string;
       videoState?: {
@@ -5013,6 +5015,8 @@ const runtimeConfig = {
         source: MediaEnvelopeMediaSource
       ): {
         texture: any;
+        videoTexture?: any;
+        diagnosticTexture?: any;
         video?: HTMLVideoElement;
         videoState?: {
           phase: string;
@@ -5020,11 +5024,39 @@ const runtimeConfig = {
           playError?: string;
           mediaErrorCode?: number;
         };
+        setDiagnostic?: (label: string, detail?: string) => void;
         sourceUrl: string;
       } {
         const T3: any = THREE;
         const src = mediaEnvelopeSourceUrl(source.src);
         if (source.type === "video") {
+          const diagnosticCanvas = document.createElement("canvas");
+          diagnosticCanvas.width = 1024;
+          diagnosticCanvas.height = 576;
+          const diagnosticContext = diagnosticCanvas.getContext("2d");
+          const diagnosticTexture = new T3.CanvasTexture(diagnosticCanvas);
+
+          const setDiagnostic = (label: string, detail = "") => {
+            if (!diagnosticContext) return;
+            diagnosticContext.fillStyle = "#111";
+            diagnosticContext.fillRect(0, 0, diagnosticCanvas.width, diagnosticCanvas.height);
+            diagnosticContext.strokeStyle = "#fff";
+            diagnosticContext.lineWidth = 12;
+            diagnosticContext.strokeRect(16, 16, diagnosticCanvas.width - 32, diagnosticCanvas.height - 32);
+            diagnosticContext.fillStyle = "#fff";
+            diagnosticContext.textAlign = "center";
+            diagnosticContext.textBaseline = "middle";
+            diagnosticContext.font = "700 54px ui-sans-serif, system-ui";
+            diagnosticContext.fillText(label, diagnosticCanvas.width / 2, diagnosticCanvas.height / 2 - 24);
+            if (detail) {
+              diagnosticContext.font = "400 28px ui-sans-serif, system-ui";
+              diagnosticContext.fillText(detail.slice(0, 72), diagnosticCanvas.width / 2, diagnosticCanvas.height / 2 + 48);
+            }
+            diagnosticTexture.needsUpdate = true;
+          };
+
+          setDiagnostic("VIDEO LOADING", source.id);
+
           const video = document.createElement("video");
           const state = {
             phase: "created",
@@ -5036,6 +5068,13 @@ const runtimeConfig = {
             state.phase = phase;
             state.lastEventAt = performance.now();
             state.mediaErrorCode = video.error?.code;
+            if (phase === "error") {
+              setDiagnostic("VIDEO FAILED", `media error ${video.error?.code ?? "unknown"}`);
+            } else if (phase === "play-error") {
+              setDiagnostic("VIDEO PLAY BLOCKED", state.playError ?? "playback error");
+            } else if (phase === "stalled") {
+              setDiagnostic("VIDEO STALLED", source.id);
+            }
             window.dispatchEvent(new CustomEvent("webrev:media-envelope-video-state", {
               detail: {
                 mediaId: source.id,
@@ -5079,8 +5118,10 @@ const runtimeConfig = {
           video.setAttribute("playsinline", "");
           video.preload = "auto";
 
-          const texture = new T3.VideoTexture(video);
-          if ("colorSpace" in texture && T3.SRGBColorSpace) texture.colorSpace = T3.SRGBColorSpace;
+          const videoTexture = new T3.VideoTexture(video);
+          if ("colorSpace" in videoTexture && T3.SRGBColorSpace) {
+            videoTexture.colorSpace = T3.SRGBColorSpace;
+          }
 
           const tryPlay = () => {
             void video.play().then(() => {
@@ -5093,7 +5134,15 @@ const runtimeConfig = {
           video.addEventListener("canplay", tryPlay, { once: true });
           video.load();
           tryPlay();
-          return { texture, video, videoState: state, sourceUrl: src };
+          return {
+            texture: diagnosticTexture,
+            videoTexture,
+            diagnosticTexture,
+            video,
+            videoState: state,
+            setDiagnostic,
+            sourceUrl: src
+          };
         }
         const texture = new T3.TextureLoader().load(src);
         if ("colorSpace" in texture && T3.SRGBColorSpace) texture.colorSpace = T3.SRGBColorSpace;
@@ -5111,6 +5160,10 @@ const runtimeConfig = {
           }
           tile.mesh?.geometry?.dispose?.();
           disposeMaterial(tile.material);
+          tile.videoTexture?.dispose?.();
+          if (tile.diagnosticTexture && tile.diagnosticTexture !== tile.texture) {
+            tile.diagnosticTexture.dispose?.();
+          }
           tile.texture?.dispose?.();
         }
         active.group?.parent?.remove?.(active.group);
@@ -5350,7 +5403,8 @@ const runtimeConfig = {
             duration: Number.isFinite(tile.video.duration) ? tile.video.duration : null,
             videoWidth: tile.video.videoWidth,
             videoHeight: tile.video.videoHeight,
-            currentSrc: tile.video.currentSrc || tile.video.src || null
+            currentSrc: tile.video.currentSrc || tile.video.src || null,
+            usingVideoTexture: tile.material?.map === tile.videoTexture
           };
         }
 
@@ -5542,11 +5596,24 @@ const runtimeConfig = {
           );
           mesh.renderOrder = foreground ? 9000 : -10;
           group.add(mesh);
+
+          if (created.video && created.videoTexture) {
+            const revealVideoTexture = () => {
+              if (!created.video || created.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+              material.map = created.videoTexture;
+              material.needsUpdate = true;
+            };
+            created.video.addEventListener("loadeddata", revealVideoTexture);
+            created.video.addEventListener("playing", revealVideoTexture);
+          }
+
           tiles.push({
             mediaId: source.id,
             mesh,
             material,
             texture: created.texture,
+            videoTexture: created.videoTexture,
+            diagnosticTexture: created.diagnosticTexture,
             video: created.video,
             sourceUrl: created.sourceUrl,
             videoState: created.videoState,

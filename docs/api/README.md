@@ -1125,6 +1125,19 @@ This returns the active media-envelope debug state with per-tile trace data, inc
 - tile NDC center
 - whether the tile center is inside the camera viewport
 
+The default video patch now stays visibly present while media is loading. Before the first usable frame is available, the patch uses a diagnostic texture such as:
+
+```text
+VIDEO LOADING
+VIDEO FAILED
+VIDEO PLAY BLOCKED
+VIDEO STALLED
+```
+
+Once the browser reports usable frame data, the material swaps from the diagnostic texture to the real `VideoTexture`.
+
+This means a missing rectangle is now a geometry/viewport problem, while a visible diagnostic rectangle is a media/network/playback problem.
+
 The runtime dispatches:
 
 ```text
