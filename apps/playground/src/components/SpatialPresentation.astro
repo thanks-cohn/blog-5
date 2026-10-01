@@ -5187,14 +5187,12 @@ const runtimeConfig = {
         const tileHeight = Math.max(4, Number(layout.tileAngularHeightDeg ?? Math.max(5, cellHeight - gap)));
 
         const camera = cameraPosition();
-        // Surface coordinates are measured outward from the envelope origin.
-        // To place media on the side facing the viewer, point FROM the origin
-        // TO the camera. The previous camera->origin vector placed the tile on
-        // the far side of the sphere.
-        const cameraFacing =
-          mediaEnvelopeDirection(origin, camera) ??
-          ({ x: 0, y: 0, z: 1 } as Vec3);
-        const baseCenterAngles = mediaEnvelopeAngles(cameraFacing);
+        // The focus camera is inside the temporary oversphere. Put the media
+        // on the far inner wall along the view ray: camera -> focus -> sphere.
+        const innerViewWallDirection =
+          mediaEnvelopeDirection(camera, origin) ??
+          ({ x: 0, y: 0, z: -1 } as Vec3);
+        const baseCenterAngles = mediaEnvelopeAngles(innerViewWallDirection);
         const centerAngles = {
           azimuthDeg:
             baseCenterAngles.azimuthDeg + Number(layout.azimuthOffsetDeg ?? 0),
