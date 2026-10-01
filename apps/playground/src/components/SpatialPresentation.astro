@@ -373,7 +373,7 @@ const runtimeConfig = {
       paddingPx?: number;
     }>;
     layout?: {
-      mode?: "grid" | "hero" | "grid-with-hero";
+      mode?: "grid" | "hero" | "grid-with-hero" | "viewport-fit";
       rows?: number;
       columns?: number;
       horizontalArcDeg?: number;
@@ -383,6 +383,10 @@ const runtimeConfig = {
       tileAngularHeightDeg?: number;
       azimuthOffsetDeg?: number;
       elevationOffsetDeg?: number;
+      viewportWidth?: number;
+      viewportHeight?: number;
+      viewportOffsetX?: number;
+      viewportOffsetY?: number;
     };
     media?: MediaEnvelopeMediaSource[];
     choreography?: {
@@ -698,6 +702,7 @@ const runtimeConfig = {
         setOversphereRadius(radius: number): number;
         enterOversphereInspectMode(): boolean;
         exitOversphereInspectMode(): boolean;
+        getOversphereMediaTrace(): MediaEnvelopeRuntimeState;
         getOversphereInspectState(): {
           active: boolean;
           pointerLocked: boolean;
@@ -1307,6 +1312,13 @@ const runtimeConfig = {
       material: any;
       texture: any;
       video?: HTMLVideoElement;
+      sourceUrl?: string;
+      videoState?: {
+        phase: string;
+        lastEventAt: number;
+        playError?: string;
+        mediaErrorCode?: number;
+      };
       baseOpacity: number;
       scale: number;
       opacity: number;
@@ -4870,6 +4882,105 @@ const runtimeConfig = {
         return { geometry, centerOffset };
       }
 
+      function createMediaEnvelopeViewportPatchGeometry(
+        radius: number,
+        origin: Vec3,
+        camera: Vec3,
+        widthFraction: number,
+        heightFraction: number,
+        offsetX: number,
+        offsetY: number
+      ) {
+        const T3: any = THREE;
+        const segmentsX = 16;
+        const segmentsY = 10;
+        const basis = screenBasis(origin, camera);
+        const fovRadians = Math.max(1, Number(threeCamera?.fov ?? 60)) * Math.PI / 180;
+        const tanHalfFov = Math.tan(fovRadians * 0.5);
+        const aspect = Math.max(0.1, Number(threeCamera?.aspect ?? (width / Math.max(1, height))));
+        const cameraFromOrigin = {
+          x: camera.x - origin.x,
+          y: camera.y - origin.y,
+          z: camera.z - origin.z
+        };
+        const cameraDistance = Math.hypot(
+          cameraFromOrigin.x,
+          cameraFromOrigin.y,
+          cameraFromOrigin.z
+        );
+        const resolvedRadius = Math.max(radius, cameraDistance + 0.75);
+
+        const rayToSphere = (ndcX: number, ndcY: number) => {
+          const dx =
+            basis.forward.x +
+            basis.right.x * ndcX * tanHalfFov * aspect +
+            basis.up.x * ndcY * tanHalfFov;
+          const dy =
+            basis.forward.y +
+            basis.right.y * ndcX * tanHalfFov * aspect +
+            basis.up.y * ndcY * tanHalfFov;
+          const dz =
+            basis.forward.z +
+            basis.right.z * ndcX * tanHalfFov * aspect +
+            basis.up.z * ndcY * tanHalfFov;
+          const length = Math.max(0.000001, Math.hypot(dx, dy, dz));
+          const direction = { x: dx / length, y: dy / length, z: dz / length };
+
+          const ox = camera.x - origin.x;
+          const oy = camera.y - origin.y;
+          const oz = camera.z - origin.z;
+          const b = 2 * (ox * direction.x + oy * direction.y + oz * direction.z);
+          const cc = ox * ox + oy * oy + oz * oz - resolvedRadius * resolvedRadius;
+          const discriminant = Math.max(0, b * b - 4 * cc);
+          const t = (-b + Math.sqrt(discriminant)) * 0.5;
+          return {
+            x: camera.x + direction.x * t - origin.x,
+            y: camera.y + direction.y * t - origin.y,
+            z: camera.z + direction.z * t - origin.z
+          };
+        };
+
+        const halfWidth = Math.max(0.12, Math.min(0.92, widthFraction));
+        const halfHeight = Math.max(0.12, Math.min(0.92, heightFraction));
+        const centerOffset = rayToSphere(offsetX, offsetY);
+        const positions: number[] = [];
+        const uvs: number[] = [];
+        const indices: number[] = [];
+
+        for (let y = 0; y <= segmentsY; y++) {
+          const v = y / segmentsY;
+          const ndcY = offsetY + (0.5 - v) * 2 * halfHeight;
+          for (let x = 0; x <= segmentsX; x++) {
+            const u = x / segmentsX;
+            const ndcX = offsetX + (u - 0.5) * 2 * halfWidth;
+            const point = rayToSphere(ndcX, ndcY);
+            positions.push(
+              point.x - centerOffset.x,
+              point.y - centerOffset.y,
+              point.z - centerOffset.z
+            );
+            uvs.push(u, 1 - v);
+          }
+        }
+
+        for (let y = 0; y < segmentsY; y++) {
+          for (let x = 0; x < segmentsX; x++) {
+            const a = y * (segmentsX + 1) + x;
+            const b = a + 1;
+            const d = (y + 1) * (segmentsX + 1) + x;
+            const e = d + 1;
+            indices.push(a, d, b, b, d, e);
+          }
+        }
+
+        const geometry = new T3.BufferGeometry();
+        geometry.setAttribute("position", new T3.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute("uv", new T3.Float32BufferAttribute(uvs, 2));
+        geometry.setIndex(indices);
+        geometry.computeVertexNormals();
+        return { geometry, centerOffset, resolvedRadius };
+      }
+
       function mediaEnvelopeProtectedDirections(
         program: MediaEnvelopeProgram,
         stationIndex: number,
@@ -4898,25 +5009,95 @@ const runtimeConfig = {
         return result;
       }
 
-      function createMediaEnvelopeTexture(source: MediaEnvelopeMediaSource) {
+      function createMediaEnvelopeTexture(
+        source: MediaEnvelopeMediaSource
+      ): {
+        texture: any;
+        video?: HTMLVideoElement;
+        videoState?: {
+          phase: string;
+          lastEventAt: number;
+          playError?: string;
+          mediaErrorCode?: number;
+        };
+        sourceUrl: string;
+      } {
         const T3: any = THREE;
         const src = mediaEnvelopeSourceUrl(source.src);
         if (source.type === "video") {
           const video = document.createElement("video");
+          const state = {
+            phase: "created",
+            lastEventAt: performance.now(),
+            playError: undefined as string | undefined,
+            mediaErrorCode: undefined as number | undefined
+          };
+          const report = (phase: string) => {
+            state.phase = phase;
+            state.lastEventAt = performance.now();
+            state.mediaErrorCode = video.error?.code;
+            window.dispatchEvent(new CustomEvent("webrev:media-envelope-video-state", {
+              detail: {
+                mediaId: source.id,
+                src,
+                phase,
+                readyState: video.readyState,
+                networkState: video.networkState,
+                paused: video.paused,
+                ended: video.ended,
+                currentTime: video.currentTime,
+                duration: Number.isFinite(video.duration) ? video.duration : null,
+                videoWidth: video.videoWidth,
+                videoHeight: video.videoHeight,
+                mediaErrorCode: video.error?.code ?? null,
+                playError: state.playError ?? null
+              }
+            }));
+          };
+
+          for (const eventName of [
+            "loadstart",
+            "loadedmetadata",
+            "loadeddata",
+            "canplay",
+            "playing",
+            "waiting",
+            "stalled",
+            "suspend",
+            "ended"
+          ]) {
+            video.addEventListener(eventName, () => report(eventName));
+          }
+          video.addEventListener("error", () => report("error"));
+
+          video.crossOrigin = "anonymous";
           video.src = src;
           video.loop = source.loop !== false;
           video.muted = source.muted !== false;
+          video.autoplay = true;
           video.playsInline = true;
+          video.setAttribute("playsinline", "");
           video.preload = "auto";
-          video.crossOrigin = "anonymous";
+
           const texture = new T3.VideoTexture(video);
           if ("colorSpace" in texture && T3.SRGBColorSpace) texture.colorSpace = T3.SRGBColorSpace;
-          void video.play().catch(() => {});
-          return { texture, video };
+
+          const tryPlay = () => {
+            void video.play().then(() => {
+              report("playing");
+            }).catch((error) => {
+              state.playError = error instanceof Error ? error.message : String(error);
+              report("play-error");
+            });
+          };
+          video.addEventListener("canplay", tryPlay, { once: true });
+          video.load();
+          tryPlay();
+          return { texture, video, videoState: state, sourceUrl: src };
         }
         const texture = new T3.TextureLoader().load(src);
         if ("colorSpace" in texture && T3.SRGBColorSpace) texture.colorSpace = T3.SRGBColorSpace;
-        return { texture };
+        return { texture, sourceUrl: src };
       }
 
       function disposeActiveMediaEnvelope() {
@@ -5090,14 +5271,6 @@ const runtimeConfig = {
           )
         );
         const selected = selectDefaultOversphereVideo(stationIndex);
-        const focusedObject = mediaEnvelopeFocusedObject(
-          stationIndex,
-          typeof context.focusedAssetName === "string"
-            ? context.focusedAssetName
-            : ""
-        );
-        const viewportSideOffset =
-          focusedObject?.local.x < 0 ? 18 : -18;
         const programId = "__default-oversphere-video__";
         const program: MediaEnvelopeProgram = {
           id: programId,
@@ -5124,16 +5297,13 @@ const runtimeConfig = {
           },
           protectedRegions: [],
           layout: {
-            mode: "hero",
+            mode: "viewport-fit",
             rows: 1,
             columns: 1,
-            horizontalArcDeg: 64,
-            verticalArcDeg: 40,
-            gapDeg: 0,
-            tileAngularWidthDeg: 56,
-            tileAngularHeightDeg: 34,
-            azimuthOffsetDeg: viewportSideOffset,
-            elevationOffsetDeg: 4
+            viewportWidth: 0.62,
+            viewportHeight: 0.46,
+            viewportOffsetX: 0,
+            viewportOffsetY: 0.02
           },
           media: selected
             ? [{
@@ -5161,6 +5331,52 @@ const runtimeConfig = {
         );
       }
 
+      function mediaEnvelopeTileViewportTrace(tile: ActiveMediaEnvelopeTile) {
+        const result: Record<string, unknown> = {
+          sourceUrl: tile.sourceUrl ?? null
+        };
+
+        if (tile.video) {
+          result.video = {
+            phase: tile.videoState?.phase ?? "unknown",
+            lastEventAt: tile.videoState?.lastEventAt ?? null,
+            playError: tile.videoState?.playError ?? null,
+            mediaErrorCode: tile.video.error?.code ?? tile.videoState?.mediaErrorCode ?? null,
+            readyState: tile.video.readyState,
+            networkState: tile.video.networkState,
+            paused: tile.video.paused,
+            ended: tile.video.ended,
+            currentTime: tile.video.currentTime,
+            duration: Number.isFinite(tile.video.duration) ? tile.video.duration : null,
+            videoWidth: tile.video.videoWidth,
+            videoHeight: tile.video.videoHeight,
+            currentSrc: tile.video.currentSrc || tile.video.src || null
+          };
+        }
+
+        if (threeCamera && tile.mesh) {
+          try {
+            const T3: any = THREE;
+            threeCamera.updateMatrixWorld?.();
+            tile.mesh.updateWorldMatrix?.(true, false);
+            const world = new T3.Vector3();
+            tile.mesh.getWorldPosition(world);
+            const ndc = world.clone().project(threeCamera);
+            result.worldCenter = { x: world.x, y: world.y, z: world.z };
+            result.ndcCenter = { x: ndc.x, y: ndc.y, z: ndc.z };
+            result.centerInViewport =
+              ndc.z >= -1 && ndc.z <= 1 &&
+              Math.abs(ndc.x) <= 1 &&
+              Math.abs(ndc.y) <= 1;
+          } catch (error) {
+            result.viewportTraceError =
+              error instanceof Error ? error.message : String(error);
+          }
+        }
+
+        return result;
+      }
+
       function mediaEnvelopeDebugState(): MediaEnvelopeRuntimeState {
         const active = activeMediaEnvelope;
         if (!active) return { active: false };
@@ -5184,7 +5400,8 @@ const runtimeConfig = {
             surfaceCoordinate: { ...tile.surfaceCoordinate },
             scale: tile.scale,
             opacity: tile.opacity,
-            hero: tile.hero
+            hero: tile.hero,
+            trace: mediaEnvelopeTileViewportTrace(tile)
           })),
           activeCues: [...active.activeCueLabels]
         };
@@ -5217,7 +5434,7 @@ const runtimeConfig = {
             ? context.focusedAssetName
             : focusExperience?.object.name ?? "";
         const origin = resolveMediaEnvelopeOrigin(program, stationIndex, focusedAssetName);
-        const radius = resolveMediaEnvelopeRadius(program, stationIndex, origin);
+        let radius = resolveMediaEnvelopeRadius(program, stationIndex, origin);
 
         const T3: any = THREE;
         const group = new T3.Group();
@@ -5253,25 +5470,30 @@ const runtimeConfig = {
         };
         const protectedDirections = mediaEnvelopeProtectedDirections(program, stationIndex, origin);
         const candidates: Array<{ azimuthDeg: number; elevationDeg: number }> = [];
+        const viewportFit = layout.mode === "viewport-fit";
 
-        for (let row = 0; row < rows; row++) {
-          for (let column = 0; column < columns; column++) {
-            const azimuthDeg =
-              centerAngles.azimuthDeg -
-              horizontalArc / 2 +
-              cellWidth * (column + 0.5);
-            const elevationDeg =
-              centerAngles.elevationDeg +
-              verticalArc / 2 -
-              cellHeight * (row + 0.5);
-            if (elevationDeg <= -86 || elevationDeg >= 86) continue;
-            const direction = mediaEnvelopeUnitFromAngles(azimuthDeg, elevationDeg);
-            const blocked = protectedDirections.some(
-              (protectedRegion) =>
-                mediaEnvelopeAngularDistanceDeg(direction, protectedRegion.direction) <
-                protectedRegion.radiusDeg
-            );
-            if (!blocked) candidates.push({ azimuthDeg, elevationDeg });
+        if (viewportFit) {
+          candidates.push({ ...centerAngles });
+        } else {
+          for (let row = 0; row < rows; row++) {
+            for (let column = 0; column < columns; column++) {
+              const azimuthDeg =
+                centerAngles.azimuthDeg -
+                horizontalArc / 2 +
+                cellWidth * (column + 0.5);
+              const elevationDeg =
+                centerAngles.elevationDeg +
+                verticalArc / 2 -
+                cellHeight * (row + 0.5);
+              if (elevationDeg <= -86 || elevationDeg >= 86) continue;
+              const direction = mediaEnvelopeUnitFromAngles(azimuthDeg, elevationDeg);
+              const blocked = protectedDirections.some(
+                (protectedRegion) =>
+                  mediaEnvelopeAngularDistanceDeg(direction, protectedRegion.direction) <
+                  protectedRegion.radiusDeg
+              );
+              if (!blocked) candidates.push({ azimuthDeg, elevationDeg });
+            }
           }
         }
 
@@ -5280,13 +5502,26 @@ const runtimeConfig = {
           const source = media[index];
           const coordinate = candidates[index];
           if (!source?.id || !source?.src) continue;
-          const patch = createMediaEnvelopePatchGeometry(
-            radius,
-            coordinate.azimuthDeg,
-            coordinate.elevationDeg,
-            tileWidth,
-            tileHeight
-          );
+          const patch = viewportFit
+            ? createMediaEnvelopeViewportPatchGeometry(
+                radius,
+                origin,
+                camera,
+                Math.max(0.12, Math.min(0.92, Number(layout.viewportWidth ?? 0.62))),
+                Math.max(0.12, Math.min(0.92, Number(layout.viewportHeight ?? 0.46))),
+                Math.max(-0.8, Math.min(0.8, Number(layout.viewportOffsetX ?? 0))),
+                Math.max(-0.8, Math.min(0.8, Number(layout.viewportOffsetY ?? 0)))
+              )
+            : createMediaEnvelopePatchGeometry(
+                radius,
+                coordinate.azimuthDeg,
+                coordinate.elevationDeg,
+                tileWidth,
+                tileHeight
+              );
+          if ("resolvedRadius" in patch) {
+            radius = Math.max(radius, Number(patch.resolvedRadius) || radius);
+          }
           const created = createMediaEnvelopeTexture(source);
           const baseOpacity = Math.max(0, Math.min(1, Number(source.opacity ?? 1)));
           const foreground = program.surface?.depthMode === "foreground";
@@ -5313,6 +5548,8 @@ const runtimeConfig = {
             material,
             texture: created.texture,
             video: created.video,
+            sourceUrl: created.sourceUrl,
+            videoState: created.videoState,
             baseOpacity,
             scale: 1,
             opacity: baseOpacity,
@@ -5648,6 +5885,9 @@ const runtimeConfig = {
         },
         exitOversphereInspectMode() {
           return exitOversphereInspectMode();
+        },
+        getOversphereMediaTrace() {
+          return mediaEnvelopeDebugState();
         },
         getOversphereInspectState() {
           return {

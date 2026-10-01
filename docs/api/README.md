@@ -956,6 +956,7 @@ The current v1 renderer:
 - computes a radius large enough to contain the current and next main-panel regions plus configurable padding/panel allowance
 - creates curved, tessellated media patches on the sphere surface
 - can place focus media on the far inner wall along the settled camera-to-focus view ray
+- supports a viewport-fit mode that projects the actual focus viewport onto the inner sphere
 - supports explicit fixed sphere radius for authored distance control
 - places ordinary grid patches around a camera/focus-centered spherical layout
 - keeps tile vertical orientation stable against world-up
@@ -1086,6 +1087,53 @@ envelope: {
 ```
 
 If a program omits a fixed radius, the generic resolver may still derive one from its coverage settings.
+
+### Oversphere media tracing and viewport fit
+
+The default oversphere video now uses a **viewport-fit** spherical patch instead of relying on a guessed angular offset. The runtime casts the final focus camera viewport onto the inner sphere and builds the curved video patch from those ray/sphere intersections.
+
+This gives the project default a stronger invariant:
+
+```text
+focused camera settles
+→ viewport rays intersect inner sphere
+→ video patch is built from those intersections
+→ patch center is in the camera viewport
+→ patch faces inward toward the viewer
+```
+
+If the requested oversphere radius is too small to contain the settled focus camera, the runtime automatically expands the effective radius enough to keep the camera inside the sphere.
+
+The media pipeline is also traceable:
+
+```js
+api.getOversphereMediaTrace()
+```
+
+This returns the active media-envelope debug state with per-tile trace data, including:
+
+- selected source URL
+- video lifecycle phase
+- `readyState`
+- `networkState`
+- paused / ended state
+- current time / duration
+- decoded video width / height
+- media error code
+- autoplay/playback error text
+- tile world center
+- tile NDC center
+- whether the tile center is inside the camera viewport
+
+The runtime dispatches:
+
+```text
+webrev:media-envelope-video-state
+```
+
+for video lifecycle transitions such as `loadstart`, `loadedmetadata`, `canplay`, `playing`, `waiting`, `stalled`, `error`, and `ended`.
+
+This is intended to distinguish geometry problems from media-network/playback problems without guessing.
 
 ### Oversphere inspection mode
 
