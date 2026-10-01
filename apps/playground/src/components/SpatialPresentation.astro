@@ -959,6 +959,7 @@ const runtimeConfig = {
     mode: PlaneTravelMode,
     customTravelId?: string
   ) => void = () => {};
+  let resetActiveMediaEnvelopeFromWebglRecovery = () => {};
 
   function ensureThree() {
     if (threeRenderer || !(glbCanvas instanceof HTMLCanvasElement)) return;
@@ -980,7 +981,7 @@ const runtimeConfig = {
         threeRetryAt.clear();
         debugGlobes.clear();
         envelopeDebugGlobes.clear();
-        activeMediaEnvelope = null;
+        resetActiveMediaEnvelopeFromWebglRecovery();
         ensureThree();
         window.dispatchEvent(new CustomEvent("webrev:webgl-context-restored"));
       });
@@ -1299,6 +1300,9 @@ const runtimeConfig = {
     };
 
     let activeMediaEnvelope: ActiveMediaEnvelope | null = null;
+    resetActiveMediaEnvelopeFromWebglRecovery = () => {
+      activeMediaEnvelope = null;
+    };
 
     const configuredOversphereSelection =
       config.oversphereLocations?.selection &&
@@ -3332,7 +3336,7 @@ const runtimeConfig = {
       listEditorCameraPresets() {
         return HEMISPHERE_CAMERA_PRESETS.map((preset) => ({ ...preset }));
       }
-    };
+    } as any;
 
     const stations = stationDefinitions;
     const assetsByArtwork = config.assetsByArtwork ?? {};
