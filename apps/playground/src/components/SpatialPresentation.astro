@@ -41,6 +41,21 @@ const discoveredMusic = import.meta.glob("../assets/music/*.{mp3,wav,ogg,m4a,aac
   import: "default"
 }) as Record<string, string>;
 
+const discoveredEnvelopeMedia = import.meta.glob("../assets/**/*.{mp4,webm,gif,png,jpg,jpeg,webp,avif}", {
+  eager: true,
+  query: "?url",
+  import: "default"
+}) as Record<string, string>;
+
+const mediaEnvelopeMedia = Object.entries(discoveredEnvelopeMedia)
+  .map(([path, url]) => ({
+    id: path.split("/").pop() ?? path,
+    name: path.split("/").pop() ?? path,
+    path,
+    url
+  }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
 const musicTracks = Object.entries(discoveredMusic)
   .map(([path, url]) => ({ name: path.split("/").pop() ?? path, url }))
   .sort((a, b) => a.name.localeCompare(b.name));
@@ -79,6 +94,7 @@ const runtimeConfig = {
   assetInventory,
   centerImagesByArtwork,
   musicTracks,
+  mediaEnvelopeMedia,
   resolvedLinks: links
 };
 ---
@@ -265,6 +281,85 @@ const runtimeConfig = {
   type FocusPlaybackScope = "station" | "all";
   type FocusPlaybackOrder = "ordered" | "random";
   type PlaneTravelMode = "teleport" | "roller-coaster" | "custom";
+
+  type MediaEnvelopeTrigger =
+    | { type: "song"; trackId: string }
+    | { type: "object-focus"; assetName: string }
+    | { type: "station-enter"; stationId: string }
+    | { type: "journey-progress"; segmentId: string; gte: number }
+    | { type: "event"; eventName: string }
+    | { type: "custom"; resolverId: string; options?: Record<string, unknown> };
+
+  type MediaEnvelopeMediaSource = {
+    id: string;
+    type: "video" | "image";
+    src: string;
+    loop?: boolean;
+    muted?: boolean;
+    opacity?: number;
+  };
+
+  type MediaEnvelopeProgram = {
+    id: string;
+    envelope?: {
+      shape?: "sphere";
+      origin?: { mode?: "focused-object" | "station-center"; offset?: Vec3 };
+      growth?: { mode?: "instant" | "timed"; durationMs?: number; easing?: "linear" | "easeOutCubic" };
+    };
+    coverage?: {
+      include?: Array<"current-main-panel" | "next-main-panel">;
+      padding?: number;
+      panelAllowance?: number;
+      minRadius?: number;
+    };
+    surface?: {
+      side?: "inside";
+      orientation?: { mode?: "upright-to-world" | "surface-native" };
+    };
+    protectedRegions?: Array<{
+      target: "current-main-panel" | "next-main-panel";
+      mode?: "avoid";
+      angularRadiusDeg?: number;
+      paddingPx?: number;
+    }>;
+    layout?: {
+      mode?: "grid" | "hero" | "grid-with-hero";
+      rows?: number;
+      columns?: number;
+      horizontalArcDeg?: number;
+      verticalArcDeg?: number;
+      gapDeg?: number;
+      tileAngularWidthDeg?: number;
+      tileAngularHeightDeg?: number;
+    };
+    media?: MediaEnvelopeMediaSource[];
+    choreography?: {
+      clock?: "binding";
+      cues?: Array<Record<string, unknown>>;
+    };
+  };
+
+  type MediaEnvelopeBinding = {
+    id: string;
+    trigger: MediaEnvelopeTrigger;
+    programId: string;
+    priority?: number;
+  };
+
+  type MediaEnvelopeRuntimeState = {
+    active: boolean;
+    bindingId?: string;
+    programId?: string;
+    trigger?: Record<string, unknown>;
+    stationId?: string;
+    focusedAssetName?: string;
+    resolvedRadius?: number;
+    origin?: Vec3;
+    clockSeconds?: number;
+    tileCount?: number;
+    tiles?: Array<Record<string, unknown>>;
+    activeCues?: string[];
+  };
   type UnpairedGlbCountPolicy =
     | number
     | "all"
@@ -457,6 +552,7 @@ const runtimeConfig = {
         getAudioDebugState(): Record<string, unknown>;
         getRandomizationDebugState(): Record<string, unknown>;
         getGlbSelectionDebugState(stationId?: string): Record<string, unknown> | null;
+        getMediaEnvelopeDebugState(): MediaEnvelopeRuntimeState;
       };
       webrevPresentationSettings?: {
         get(key?: PresentationSettingKey): PresentationSettingsSnapshot | PresentationSettingValue;
@@ -517,6 +613,17 @@ const runtimeConfig = {
         saveSettings(): Record<string, unknown> | null;
         getStyleSnapshot(): Record<string, unknown> | null;
         downloadStyleSnapshot(): boolean;
+        listMediaEnvelopePrograms(): MediaEnvelopeProgram[];
+        getMediaEnvelopeProgram(id: string): MediaEnvelopeProgram | null;
+        setMediaEnvelopeProgram(program: MediaEnvelopeProgram): MediaEnvelopeProgram;
+        removeMediaEnvelopeProgram(id: string): boolean;
+        listMediaEnvelopeBindings(): MediaEnvelopeBinding[];
+        setMediaEnvelopeBinding(binding: MediaEnvelopeBinding): MediaEnvelopeBinding;
+        removeMediaEnvelopeBinding(id: string): boolean;
+        bindSongToMediaEnvelope(trackId: string, programId: string, bindingId?: string): MediaEnvelopeBinding;
+        activateMediaEnvelope(programId: string, context?: Record<string, unknown>): boolean;
+        deactivateMediaEnvelope(): void;
+        getActiveMediaEnvelopeState(): MediaEnvelopeRuntimeState;
         getSpatialEnvelope(name: string): SpatialEnvelopeConfig | null;
         setSpatialEnvelope(name: string, patch: Partial<SpatialEnvelopeConfig>): void;
         setEnvelopeDebug(name: string, visible: boolean): void;
@@ -1066,6 +1173,65 @@ const runtimeConfig = {
     const fallbackSongHistoryWindowStorageKey = "webrev:fallback-song-history-window:v2";
     const avoidCurrentPlaneSongsStorageKey = "webrev:avoid-current-plane-songs:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
+
+    const mediaEnvelopePrograms = new Map<string, MediaEnvelopeProgram>(
+      (Array.isArray(config.mediaEnvelopePrograms) ? config.mediaEnvelopePrograms : [])
+        .filter((program: any) => program && typeof program.id === "string" && program.id)
+        .map((program: MediaEnvelopeProgram) => [program.id, JSON.parse(JSON.stringify(program))])
+    );
+    let mediaEnvelopeBindings: MediaEnvelopeBinding[] =
+      (Array.isArray(config.mediaEnvelopeBindings) ? config.mediaEnvelopeBindings : [])
+        .filter((binding: any) =>
+          binding &&
+          typeof binding.id === "string" &&
+          binding.id &&
+          typeof binding.programId === "string" &&
+          binding.trigger &&
+          typeof binding.trigger.type === "string"
+        )
+        .map((binding: MediaEnvelopeBinding) => JSON.parse(JSON.stringify(binding)));
+    const mediaEnvelopeCatalog = new Map<string, string>();
+    for (const entry of Array.isArray(config.mediaEnvelopeMedia) ? config.mediaEnvelopeMedia : []) {
+      if (typeof entry?.id === "string" && typeof entry?.url === "string") {
+        mediaEnvelopeCatalog.set(entry.id, entry.url);
+      }
+      if (typeof entry?.name === "string" && typeof entry?.url === "string") {
+        mediaEnvelopeCatalog.set(entry.name, entry.url);
+      }
+      if (typeof entry?.path === "string" && typeof entry?.url === "string") {
+        mediaEnvelopeCatalog.set(entry.path, entry.url);
+      }
+    }
+
+    type ActiveMediaEnvelopeTile = {
+      mediaId: string;
+      mesh: any;
+      material: any;
+      texture: any;
+      video?: HTMLVideoElement;
+      baseOpacity: number;
+      scale: number;
+      opacity: number;
+      hero: boolean;
+      surfaceCoordinate: { azimuthDeg: number; elevationDeg: number };
+    };
+
+    type ActiveMediaEnvelope = {
+      program: MediaEnvelopeProgram;
+      bindingId?: string;
+      trigger: Record<string, unknown>;
+      stationIndex: number;
+      focusedAssetName: string;
+      origin: Vec3;
+      radius: number;
+      group: any;
+      tiles: ActiveMediaEnvelopeTile[];
+      activatedAt: number;
+      cueActivatedAt: Map<number, number>;
+      activeCueLabels: Set<string>;
+    };
+
+    let activeMediaEnvelope: ActiveMediaEnvelope | null = null;
 
     function loadUnpairedGlbLimits() {
       let stored: Record<string, unknown> = {};
