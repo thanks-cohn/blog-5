@@ -383,6 +383,265 @@ so entering Cinematic Mode never unexpectedly moves the audience.
 
 ---
 
+## Authored intermission programs
+
+Cinematic Mode should support **authored intermission programs**, not merely a binary location switch.
+
+The key rule is that ordinary track changes do **not** have to move the audience.
+
+A cinematic session may keep location completely fixed while background songs continue changing.
+
+Location movement becomes an explicit intermission action rather than an automatic consequence of playlist progress.
+
+For example:
+
+```text
+movie playing
+↓
+background song 1
+↓
+background song 2
+↓
+background song 3
+↓
+background song 4
+↓
+background song 5
+↓
+INTERMISSION
+↓
+optional intermission audio
+↓
+oversphere intermission clip / animation
+↓
+optional location transition
+↓
+custom intermission actions
+↓
+resume movie
+```
+
+This should be expressed as a general authored program.
+
+Illustrative shape:
+
+```ts
+type CinematicIntermissionTrigger =
+  | { type: "after-songs"; count: number }
+  | { type: "movie-time"; atSeconds: number }
+  | { type: "chapter"; chapterId: string }
+  | { type: "manual" }
+  | { type: "custom"; resolverId: string; options?: Record<string, unknown> };
+
+type CinematicIntermissionProgram = {
+  id: string;
+
+  trigger: CinematicIntermissionTrigger;
+
+  movie?: {
+    pause?: boolean;
+    resumeAfter?: boolean;
+  };
+
+  music?: {
+    keepPlaylistRunning?: boolean;
+    intermissionAudioSrc?: string;
+    intermissionAudioVolume?: number;
+    restorePreviousMusicState?: boolean;
+  };
+
+  oversphere?: {
+    mediaSrc?: string;
+    mediaType?: "video" | "image" | "animation";
+    loop?: boolean;
+    waitForEnd?: boolean;
+    programId?: string;
+  };
+
+  location?: {
+    mode?: "stay" | "change";
+    travelMode?: "inherit" | "teleport" | "roller-coaster" | "custom";
+    customTravelId?: string;
+    destinationResolverId?: string;
+  };
+
+  customActions?: Array<{
+    actionId: string;
+    options?: Record<string, unknown>;
+  }>;
+};
+```
+
+A simple movie-night configuration might say:
+
+```ts
+{
+  id: "movie-night-break",
+  trigger: {
+    type: "after-songs",
+    count: 5
+  },
+  movie: {
+    pause: true,
+    resumeAfter: true
+  },
+  music: {
+    intermissionAudioSrc: "/audio/intermission.mp3",
+    restorePreviousMusicState: true
+  },
+  oversphere: {
+    mediaSrc: "/intermission/break.mp4",
+    mediaType: "video",
+    waitForEnd: true
+  },
+  location: {
+    mode: "change",
+    travelMode: "roller-coaster"
+  }
+}
+```
+
+This produces:
+
+```text
+5 songs have elapsed
+→ pause movie
+→ play intermission audio
+→ show intermission media on oversphere
+→ travel to next location
+→ finish authored intermission actions
+→ restore movie surface at new location
+→ resume movie
+```
+
+### Fixed-location sessions
+
+The location may remain fixed for the entire cinematic session even while:
+
+- songs change;
+- playlists advance;
+- intermission media plays;
+- intermission audio plays.
+
+This should be represented explicitly:
+
+```ts
+location: {
+  mode: "stay"
+}
+```
+
+Track progression therefore has no implicit travel authority.
+
+### Custom intermission code
+
+Intermission programs should provide a stable extension point for presentation-specific behavior.
+
+The engine should not attempt to enumerate every possible intermission action.
+
+Instead, creators may register custom actions/resolvers behind explicit identifiers.
+
+Conceptually:
+
+```ts
+api.registerCinematicIntermissionAction(
+  "lower-the-lights",
+  async (context, options) => {
+    // presentation-specific behavior
+  }
+);
+```
+
+Then an authored intermission may call it:
+
+```ts
+customActions: [
+  {
+    actionId: "lower-the-lights",
+    options: {
+      durationMs: 2000
+    }
+  }
+]
+```
+
+Possible custom actions include:
+
+- change sky/lighting;
+- animate scene objects;
+- move the camera;
+- open/close doors;
+- spawn temporary scenery;
+- run dialogue;
+- trigger particles;
+- alter shaders;
+- change music;
+- display text;
+- wait for viewer interaction;
+- call project-specific journey logic;
+- perform any future presentation-defined operation.
+
+The core engine only needs the contract, ordering, cancellation, and debugging.
+
+### Intermission execution model
+
+A future runtime should treat the intermission as a small deterministic program.
+
+Suggested lifecycle:
+
+```text
+idle
+→ triggered
+→ pausing-movie
+→ intermission-audio
+→ intermission-visual
+→ optional-travel
+→ custom-actions
+→ restoring-cinematic-surface
+→ resuming-movie
+→ idle
+```
+
+Individual phases may be omitted.
+
+Actions should be composable and ordered.
+
+A useful future API direction:
+
+```ts
+api.listCinematicIntermissionPrograms()
+api.setCinematicIntermissionProgram(program)
+api.removeCinematicIntermissionProgram(id)
+
+api.beginCinematicIntermission(id)
+api.cancelCinematicIntermission()
+api.getCinematicIntermissionState()
+```
+
+### Debugging
+
+Deep Debug should expose enough information to explain why an intermission started and what it is currently doing:
+
+```ts
+{
+  active: true,
+  programId: "movie-night-break",
+  trigger: {
+    type: "after-songs",
+    count: 5
+  },
+  songsSinceLastIntermission: 5,
+  phase: "intermission-visual",
+  locationMode: "change",
+  currentActionId: null,
+  movieResumeTimeSeconds: 3812.4
+}
+```
+
+This preserves the engine's existing inspectable/agent-readable philosophy.
+
+---
+
 ## Long-form playback lifecycle
 
 Cinematic playback should expose a richer lifecycle than ordinary looping oversphere videos:
