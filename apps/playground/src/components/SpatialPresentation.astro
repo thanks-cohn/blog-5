@@ -515,6 +515,17 @@ const runtimeConfig = {
     pools: []
   };
 
+  // These live at presentation scope so the public API and the focused
+  // journey runtime share one source of truth.
+  const playedTrackHistory: string[] = [];
+  const playedTrackLedger = new Set<string>();
+  let clearJourneyPlaneTrackHistoryFromApi = () => {};
+  let requestStationFromApi: (
+    index: number,
+    mode: PlaneTravelMode,
+    customTravelId?: string
+  ) => void = () => {};
+
   function ensureThree() {
     if (threeRenderer || !(glbCanvas instanceof HTMLCanvasElement)) return;
     const T3: any = THREE;
@@ -727,7 +738,7 @@ const runtimeConfig = {
     const spatialEnvelopeStorageKey = "webrev:spatial-envelope:v1";
     const styleExplorationStorageKey = "webrev:style-exploration:v1";
     const journeyClickStartStorageKey = "webrev:journey-click-start:v1";
-    const unpairedGlbLimitStorageKey = "webrev:unpaired-glb-limit:v1";
+    const unpairedGlbLimitStorageKey = "webrev:unpaired-glb-limit:v2";
     const fallbackSongHistoryWindowStorageKey = "webrev:fallback-song-history-window:v1";
     const avoidCurrentPlaneSongsStorageKey = "webrev:avoid-current-plane-songs:v1";
     const stationDefinitions = Array.isArray(config.stations) ? config.stations : [];
@@ -2142,6 +2153,45 @@ const runtimeConfig = {
         if (typeof patch?.track === "string") assetFocusAudioState[name].track = patch.track;
         saveAssetFocusAudioState();
       },
+      getAssetTrackExclusions(name: string) {
+        return [...(assetTrackExclusionsState[name] ?? [])];
+      },
+      setAssetTrackExclusions(name: string, tracks: string[]) {
+        const asset = allSceneAssetNames().find((candidate) => candidate.name === name);
+        if (!asset || asset.kind !== "3d") return [];
+        const validTracks = new Set(
+          (Array.isArray(config.musicTracks) ? config.musicTracks : [])
+            .filter((track: any) => typeof track?.name === "string")
+            .map((track: any) => String(track.name))
+        );
+        assetTrackExclusionsState[name] = Array.from(new Set(
+          (Array.isArray(tracks) ? tracks : []).filter(
+            (track): track is string =>
+              typeof track === "string" && validTracks.has(track)
+          )
+        ));
+        saveAssetTrackExclusionsState();
+        return [...assetTrackExclusionsState[name]];
+      },
+      addAssetTrackExclusion(name: string, track: string) {
+        const asset = allSceneAssetNames().find((candidate) => candidate.name === name);
+        if (!asset || asset.kind !== "3d") return [];
+        const valid = (Array.isArray(config.musicTracks) ? config.musicTracks : [])
+          .some((candidate: any) => candidate?.name === track);
+        const current = new Set(assetTrackExclusionsState[name] ?? []);
+        if (valid) current.add(track);
+        assetTrackExclusionsState[name] = [...current];
+        saveAssetTrackExclusionsState();
+        return [...assetTrackExclusionsState[name]];
+      },
+      removeAssetTrackExclusion(name: string, track: string) {
+        assetTrackExclusionsState[name] =
+          (assetTrackExclusionsState[name] ?? []).filter(
+            (candidate) => candidate !== track
+          );
+        saveAssetTrackExclusionsState();
+        return [...assetTrackExclusionsState[name]];
+      },
       getUnpairedGlbLimit(stationId?: string) {
         return resolvedUnpairedGlbLimit(stationId);
       },
@@ -2169,19 +2219,24 @@ const runtimeConfig = {
         return fallbackSongHistoryWindow;
       },
       getPlayedTrackHistory() {
-        const catalog = trackCatalog().map((track) => track.name);
+        const catalog: string[] = (Array.isArray(config.musicTracks) ? config.musicTracks : [])
+          .filter((track: any) => typeof track?.name === "string")
+          .map((track: any) => String(track.name));
         return {
           recent: playedTrackHistory.slice(-fallbackSongHistoryWindow),
-          played: catalog.filter((name) => playedTrackLedger.has(name)),
-          unheard: catalog.filter((name) => !playedTrackLedger.has(name))
+          played: catalog.filter((name: string) => playedTrackLedger.has(name)),
+          unheard: catalog.filter((name: string) => !playedTrackLedger.has(name))
         };
       },
       clearPlayedTrackHistory() {
         playedTrackHistory.length = 0;
         playedTrackLedger.clear();
-        journeyPlanePlayedTracks.clear();
+        clearJourneyPlaneTrackHistoryFromApi();
+        const unheard: string[] = (Array.isArray(config.musicTracks) ? config.musicTracks : [])
+          .filter((track: any) => typeof track?.name === "string")
+          .map((track: any) => String(track.name));
         window.dispatchEvent(new CustomEvent("webrev:played-track-history", {
-          detail: { recent: [], played: [], unheard: trackCatalog().map((track) => track.name) }
+          detail: { recent: [], played: [], unheard }
         }));
       },
       getAvoidCurrentPlaneSongsForFallback() {
@@ -2334,7 +2389,7 @@ const runtimeConfig = {
       travelToPlane(stationId: string, mode: PlaneTravelMode = "teleport", customTravelId = "") {
         const index = stations.findIndex((station: any) => station.id === stationId);
         if (index < 0) return false;
-        requestStation(index, false, mode, customTravelId);
+        requestStationFromApi(index, mode, customTravelId);
         return true;
       },
       getStyleExplorationMode() {
@@ -3368,11 +3423,14 @@ const runtimeConfig = {
 
       function generateLayout(station: any, index: number): SceneObject[] {
         const rand = rngFor(station, index);
-        const stationInventory = (Array.isArray(config.assetInventory) ? config.assetInventory : [])
-          .filter((asset: any) =>
-            (assetStationState[asset.name] ?? inferredStationForAsset(asset)) === station.id
-          );
+        const fullInventory = Array.isArray(config.assetInventory)
+          ? config.assetInventory
+          : [];
+        const stationInventory = fullInventory.filter((asset: any) =>
+          (assetStationState[asset.name] ?? inferredStationForAsset(asset)) === station.id
+        );
 
+        // Authored pairings belong to their assigned plane.
         const paired3d = stationInventory.filter((asset: any) => {
           if (asset?.kind !== "3d") return false;
           const pairedTrack =
@@ -3381,7 +3439,10 @@ const runtimeConfig = {
           return Boolean(pairedTrack);
         });
 
-        const unpaired3d = stationInventory.filter((asset: any) => {
+        // Extra unpaired GLBs are a GLOBAL discovery pool. This is what allows
+        // a new/empty plane to receive its normal randomized 3–5 objects even
+        // when no GLBs have been explicitly assigned to that plane yet.
+        const unpaired3d = fullInventory.filter((asset: any) => {
           if (asset?.kind !== "3d") return false;
           const pairedTrack =
             assetFocusAudioState[asset.name]?.track ??
@@ -4490,6 +4551,10 @@ const runtimeConfig = {
         renderSphereSettings();
       }
 
+      requestStationFromApi = (index, mode, customTravelId = "") => {
+        requestStation(index, false, mode, customTravelId);
+      };
+
       function executeAction(action: AssetAction | undefined) {
         if (!action) return;
         if (action.type === "station") {
@@ -4528,8 +4593,6 @@ const runtimeConfig = {
       let focusAudioFadeFrame = 0;
       let focusAudioSourceUrl = "";
       let focusAudioCurrentAssetName = "";
-      const playedTrackHistory: string[] = [];
-      const playedTrackLedger = new Set<string>();
 
       function rememberPlayedTrack(url: string) {
         const track = trackCatalog().find(
