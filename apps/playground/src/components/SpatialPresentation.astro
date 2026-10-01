@@ -432,8 +432,31 @@ const runtimeConfig = {
     options?: SettingOption[];
   };
 
+  type WebRevDebugSnapshot = {
+    schemaVersion: 1;
+    capturedAt: string;
+    runtime: { route: string; viewport: { width: number; height: number; devicePixelRatio: number } };
+    camera: Record<string, unknown>;
+    travel: Record<string, unknown>;
+    journey: Record<string, unknown>;
+    audio: Record<string, unknown>;
+    randomization: Record<string, unknown>;
+    renderer: Record<string, unknown>;
+    planes: Array<Record<string, unknown>>;
+  };
+
   declare global {
     interface Window {
+      webrevDebug?: {
+        readonly schemaVersion: 1;
+        getDebugSnapshot(): WebRevDebugSnapshot;
+        getPlaneDebugState(stationId?: string): Record<string, unknown> | null;
+        getObjectDebugState(nameOrId: string): Record<string, unknown> | null;
+        getJourneyDebugState(): Record<string, unknown>;
+        getRendererDebugState(): Record<string, unknown>;
+        getAudioDebugState(): Record<string, unknown>;
+        getRandomizationDebugState(): Record<string, unknown>;
+      };
       webrevPresentationSettings?: {
         get(key?: PresentationSettingKey): PresentationSettingsSnapshot | PresentationSettingValue;
         set(key: PresentationSettingKey, value: PresentationSettingValue): PresentationSettingsSnapshot;
@@ -3172,6 +3195,145 @@ const runtimeConfig = {
         return positions;
       };
       ensureThree();
+
+      // Read-only, JSON-serializable runtime truth for agents and diagnostics.
+      // This deliberately lives beside the renderer so it can report actual
+      // layout/resource state without creating a second mutable state model.
+      function getDebugSnapshot(): WebRevDebugSnapshot {
+        const planeStates = stations.map((station: any, stationIndex: number) => {
+          const center = stationCenter(stationIndex);
+          const objects = (layouts[stationIndex] ?? []).map((obj: SceneObject) => {
+            const world = {
+              x: center.x + obj.local.x,
+              y: center.y + obj.local.y,
+              z: center.z + obj.local.z
+            };
+            const runtime = obj.kind === "3d" && obj.url
+              ? {
+                  status: glbRuntimeStatus.get(obj.name) ?? "acknowledged",
+                  attempts: threeLoadAttempts.get(obj.id) ?? 0,
+                  lastError: glbRuntimeError.get(obj.name),
+                  resident: threeObjects.has(obj.id),
+                  loading: threeLoading.has(obj.id)
+                }
+              : null;
+            return {
+              id: obj.id,
+              name: obj.name,
+              kind: obj.kind,
+              stationId: station.id,
+              stationIndex,
+              local: { ...obj.local },
+              world,
+              screen: obj.lastScreen ? { ...obj.lastScreen } : null,
+              size: obj.size,
+              spin: obj.spin,
+              hemisphere: obj.hemisphere ?? "front",
+              visible: obj.visible !== false,
+              renderedLastFrame: Boolean(obj.lastScreen && obj.visible !== false),
+              motion: JSON.parse(JSON.stringify(obj.motion)),
+              anchor: { mode: obj.anchorMode ?? "absolute", position: { ...obj.anchor }, offset: obj.anchorOffset ? { ...obj.anchorOffset } : null },
+              envelope: JSON.parse(JSON.stringify(spatialEnvelopeConfigFor(obj))),
+              modelBounds: obj.modelBounds ? JSON.parse(JSON.stringify(obj.modelBounds)) : null,
+              modelRadius: obj.modelRadius ?? null,
+              focus: focusExperience?.object === obj,
+              focusTrack: (assetFocusAudioState[obj.name]?.track ?? configuredAssetFocusTrack(obj.name)) || null,
+              trackExclusions: [...(assetTrackExclusionsState[obj.name] ?? [])],
+              runtime
+            };
+          });
+          return {
+            id: station.id,
+            label: station.label ?? station.id,
+            index: stationIndex,
+            center,
+            stationZ: stationZ(stationIndex),
+            active: stationIndex === arrivingAt && arrived(),
+            current: stationIndex === arrivingAt,
+            previous: stationIndex === (arrivingAt - 1 + stations.length) % stations.length,
+            next: stationIndex === (arrivingAt + 1) % stations.length,
+            previewPolicy: window.webrevPresentationSettings?.getPlanePreviewPolicy(station.id),
+            mainImageResident: imagePlanes.has(station.id),
+            textPlaneResident: textPlanes.has(station.id),
+            randomizedGlbs: [...(randomGlbSelectionHistory[stationIndex] ?? [])],
+            objects
+          };
+        });
+        const currentTrack = trackCatalog().find((track: any) => track.url === focusAudioSourceUrl);
+        return {
+          schemaVersion: 1,
+          capturedAt: new Date().toISOString(),
+          runtime: {
+            route: `${location.pathname}${location.search}${location.hash}`,
+            viewport: { width, height, devicePixelRatio: window.devicePixelRatio || 1 }
+          },
+          camera: {
+            position: cameraPosition(), currentZ: cameraZ, targetZ, yaw: lookYaw, pitch: lookPitch,
+            targetYaw, targetPitch, mode: presentationSettings.camera.mode,
+            placement: presentationSettings.camera.placement, arrived: arrived()
+          },
+          travel: {
+            state: arrived() ? (focusExperience ? "focus-transition" : "idle") : "roller-coaster",
+            destinationPlane: stations[arrivingAt]?.id ?? null,
+            pendingFocusObject: pendingFocusPlaylistEntry?.assetName ?? null
+          },
+          journey: {
+            active: Boolean(focusExperience || pendingFocusPlaylistEntry), stationIndex: journeyStationIndex,
+            cursor: journeyCursor, length: journeyEntries.length,
+            activeObject: focusExperience?.object.name ?? null,
+            planeCycleCount: journeyPlaneCyclesCompleted, planeSongCount: journeyPlaneSongCount,
+            completedJourneyCount,
+            residencyPolicy: window.webrevPresentationSettings?.getPlaneResidencyPolicy() ?? null,
+            clickToStart: journeyClickStartEnabled,
+            pendingDestinationEntry: pendingFocusPlaylistEntry ? { ...pendingFocusPlaylistEntry } : null
+          },
+          audio: {
+            playing: Boolean(focusAudioElement && !focusAudioElement.paused),
+            paused: Boolean(focusAudioElement?.paused), currentTrack: currentTrack?.name ?? null,
+            currentAsset: focusAudioCurrentAssetName || null, sourceUrl: focusAudioSourceUrl || null,
+            volume: focusAudioElement?.volume ?? presentationSettings.focusAudio.volume,
+            loop: Boolean(focusAudioElement?.loop), recent: [...playedTrackHistory],
+            played: [...playedTrackLedger], currentPlane: [...journeyPlanePlayedTracks]
+          },
+          randomization: {
+            unpairedGlbLimit: window.webrevPresentationSettings?.getUnpairedGlbLimit(),
+            diversityPolicy: JSON.parse(JSON.stringify(randomGlbDiversityPolicy)),
+            glbSelectionHistory: randomGlbSelectionHistory.map((entry) => [...entry]),
+            fallbackSongHistoryWindow, avoidCurrentPlaneSongs: avoidCurrentPlaneSongsForFallback
+          },
+          renderer: {
+            initialized: Boolean(threeRenderer && threeScene && threeCamera),
+            contextLost: Boolean(threeRenderer?.getContext?.().isContextLost?.()),
+            threeObjectCount: threeObjects.size, loadedGlbCount: threeObjects.size,
+            loadingGlbCount: threeLoading.size,
+            failedGlbCount: [...glbRuntimeStatus.values()].filter((value) => value === "failed").length,
+            imagePlaneCount: imagePlanes.size, textPlaneCount: textPlanes.size,
+            debugGlobeCount: debugGlobes.size + envelopeDebugGlobes.size
+          },
+          planes: planeStates
+        };
+      }
+
+      window.webrevDebug = {
+        schemaVersion: 1,
+        getDebugSnapshot,
+        getPlaneDebugState(stationId = activeStationId) {
+          return getDebugSnapshot().planes.find((plane) => plane.id === stationId) ?? null;
+        },
+        getObjectDebugState(nameOrId: string) {
+          for (const plane of getDebugSnapshot().planes) {
+            const object = (plane.objects as Array<Record<string, unknown>>).find(
+              (candidate) => candidate.name === nameOrId || candidate.id === nameOrId
+            );
+            if (object) return object;
+          }
+          return null;
+        },
+        getJourneyDebugState: () => getDebugSnapshot().journey,
+        getRendererDebugState: () => getDebugSnapshot().renderer,
+        getAudioDebugState: () => getDebugSnapshot().audio,
+        getRandomizationDebugState: () => getDebugSnapshot().randomization
+      };
 
       function rebuildAssetLayouts() {
         layouts = generateAllLayouts();

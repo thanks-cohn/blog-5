@@ -1051,3 +1051,281 @@ The current API should evolve toward those features without breaking the simple 
 - `docs/proposals/MANIFEST_DRIVEN_EDIT_AND_PRESENTATION_MODES.md`
 - `docs/proposals/JOURNEY_SEGMENT_EFFECTS_AND_SPATIAL_ENVIRONMENT_SPHERES.md`
 
+
+---
+
+# 23. Canonical source-derived contract audit (2026-10-01)
+
+This section supersedes any less-specific statement above. It records the repository as implemented, not the broader product vision. **Current** means executable source exists. **Proposed** means documentation only. The browser APIs are experimental (no semantic-version compatibility guarantee yet); the versioned JSON/storage shapes and `@webrev/core` exports are the nearest current ABI-style boundaries.
+
+## 23.1 Quick start and API roots
+
+```js
+const settings = window.webrevPresentationSettings; // mutable settings/commands
+const snapshot = window.webrevDebug?.getDebugSnapshot(); // read-only live truth, schema v1
+const discovery = await fetch('/.well-known/webrev.json').then(r => r.json());
+```
+
+`@webrev/astro` also emits the same static discovery document at `/__webrev/revision`. `WebRevAstroOptions` is `{ revision?: string; inspect?: boolean }`; revision precedence is option, `WEBREV_REVISION`, then `"dev"`. `inspect: false` disables both routes. The document is `InspectionDocument` schema 1: `{schemaVersion:1, framework:"webrev", revision, health}`.
+
+## 23.2 Complete browser command inventory
+
+All methods below are properties of `window.webrevPresentationSettings`. Getters return detached values unless noted. Mutators are synchronous, silently ignore unknown assets/stations where described by source, and do not throw for storage failures. “Persist/event” means the method writes browser state and dispatches the named non-cancelable observation event.
+
+| Method | Parameters and return | Class / effects |
+|---|---|---|
+| `get` | optional `PresentationSettingKey`; snapshot or scalar | Read. No key returns active station snapshot. |
+| `set` | key, `boolean \| number \| string`; snapshot | Mutates, clamps/normalizes, persists settings v3, notifies subscribers and `webrev:presentation-settings`. Unsupported read-only text-plane constants are unchanged. |
+| `reset` | optional key; snapshot | Mutates active station toward authored/default values; same publish effects. A full reset does not clear other storage contracts. |
+| `subscribe` | listener(snapshot); unsubscribe function | Read subscription; invokes listener immediately, then after settings publication only. |
+| `describeSettings` | optional station id; `SettingDescriptor[]` | Read metadata for generated controls. |
+| `listAssetLibrary` | none; uploaded asset records | Read global discovered library. |
+| `listAssets` | optional station id; asset records | Read assignment, placement, normalized motion, pairing and summarized GLB status. |
+| `getAssetStation` | asset name; station id or `null` | Read; only uploaded assets qualify. |
+| `setAssetStation` | name, valid station id; void | Persist/event `webrev:asset-station`; invalid input is a no-op. Layouts rebuild through the event listener. |
+| `setAssetHemisphere` | name, `front \| back`; void | Persists placement, forces visible, event `webrev:asset-placement`; unknown names can create persisted entries. |
+| `setAssetVisible` | name, boolean; void | Persist/event `webrev:asset-placement`. |
+| `getAssetMotion` | name; `ObjectMotion \| null` | Read, normalized. |
+| `setAssetMotion` | name, motion; void | Known assets only; normalize, persist/event `webrev:asset-motion`. |
+| `getAssetFocusAudio` | GLB name; `{track}` or `null` | Read fixed pairing (persisted override then config). |
+| `setAssetFocusAudio` | GLB name, `{track?: string}`; void | Persist/event `webrev:asset-focus-audio`; track is not catalog-validated here. |
+| `get/set/add/removeAssetTrackExclusion` | name and track(s); `string[]` | Reads or updates catalog-valid unique exclusions; mutators persist/event `webrev:asset-track-exclusions`. |
+| `getUnpairedGlbLimit` | optional station; policy | Read station override, then `global`, then range 3–5. |
+| `setUnpairedGlbLimit` | policy, optional station; normalized policy | Persist/event `webrev:unpaired-glb-limit`, rebuilds layouts. |
+| `get/setRandomGlbDiversityPolicy` | partial policy; policy | Runtime-only mutation/event `webrev:random-glb-diversity-policy`; rebuilds and may reroll. |
+| `get/clearRandomGlbSelectionHistory` | none; `string[][]` / void | Session runtime history. Clear does not rebuild immediately. |
+| `get/setPlanePreviewPolicy` | optional station / partial policy; policy | Station or global policy; setter persists/event `webrev:plane-preview-policy`. |
+| `get/setFallbackSongHistoryWindow` | none / count; integer | Default 4; setter persists scalar v2/event and updates transition history window. |
+| `getPlayedTrackHistory` | none; `{recent, played, unheard}` | Read URL-based session history. `unheard` is catalog URLs absent from ledger. |
+| `clearPlayedTrackHistory` | none; void | Clears session arrays/set; event `webrev:played-track-history`. Not persisted. |
+| `get/setAvoidCurrentPlaneSongsForFallback` | none / boolean; boolean | Default true; persists/event `webrev:avoid-current-plane-songs`. |
+| `getFocusPlaylist` | none; `FocusPlaylistEntry[]` | Derived read; one entry per catalog track, fixed pair first, then round-robin GLBs. This is not necessarily the live randomized journey list. |
+| `setFocusPlaybackMode` | `zone-cycle \| loop-item`; settings snapshot | Delegates to `set`. |
+| `setFocusPlaybackScope` | `station \| all`; settings snapshot | Delegates to `set`. |
+| `get/setFocusPlaybackProgram` | program; normalized program | Runtime-only. Setter event `webrev:focus-playback-program`; no storage. |
+| `setFocusPlaybackOrder` | `ordered \| random`; program | Runtime-only program patch, same event. |
+| `get/setPlaneResidencyPolicy` | policy; policy | Runtime-only; event `webrev:plane-residency-policy`. |
+| `get/setPlaneTravelMode` | mode and optional custom id; mode | Runtime-only program patch; event `webrev:plane-travel-mode`. |
+| `get/setJourneyMusicEvolution` | partial policy; policy | Runtime-only normalized pools/presets/transitions; event `webrev:journey-music-evolution`. |
+| `get/resetCompletedJourneyCount` | none; integer | Runtime-only counter. Reset returns zero and emits no event. |
+| `get/setTransitionResourcePolicy` | transition id, policy; policy/null | Runtime-only per-transition policy; setter event `webrev:transition-resource-policy`. |
+| `resolveTransitionResource` | transition id; resource id/null | Read with random side effect: exact probabilities are tried in order, then weighted remainder. Records recent selected resources. |
+| `travelToPlane` | station id, optional mode/custom id; boolean | Command. False for unknown station or unavailable renderer; otherwise requests travel. |
+| `get/setStyleExplorationMode` | none / boolean; boolean | Persists/event `webrev:style-exploration-mode`; enabling also refreshes UI. |
+| `get/setJourneyClickStart` | none / boolean; boolean | Default true; persists/event `webrev:journey-click-start`. |
+| `saveSettings` | none; style snapshot/null | Requires style exploration; persists ordinary settings and emits `webrev:style-snapshot-ready`. |
+| `getStyleSnapshot` | none; object/null | Read generated schema-1 snapshot only when style exploration is enabled. |
+| `downloadStyleSnapshot` | none; boolean | Creates and clicks a JSON download; false outside exploration mode. |
+| `get/setSpatialEnvelope` | name / name+partial config; config/null or void | Mutator normalizes, persists/event `webrev:spatial-envelope`. |
+| `setEnvelopeDebug` | name, visible; void | Convenience envelope patch. |
+| `setGlbDebugGlobe` | enabled, optional object; void | Updates/persists settings via publication. |
+| `getAssetRuntimeStatus` | uploaded GLB name; status record/null | Read summarized status/attempts/error. |
+| `getEditorState` | none; `EditLayerState` | Read clone. |
+| `setEditorMode` | `none \| hemisphere`, optional hemisphere; snapshot | Persists settings/event; entering resets preset to top and reposition target. |
+| `setEditorCameraPreset` | preset; snapshot | Invalid preset normalizes to top; no-op state change outside hemisphere mode but still publishes. |
+| `setRepositionObject` | name/null; snapshot | Sets editor target; copies known placement hemisphere; publishes. |
+| `listEditorCameraPresets` | none; `{id,label}[]` | Read four presets. |
+
+### Setting key/value rules
+
+The exact keys are those listed in sections 1 and the source union. Enum normalization is conservative: camera defaults to `locked`, placement to `outside`, context mode to `experience`, playback to `zone-cycle`, scope to `station`; numeric sphere/camera values use the spatial-sphere clamps; volume/restitution use `[0,1]`; padding/fades are nonnegative; text width ≥ 0.2, height ≥ 0.15, offsetY ≥ 0, angle `[-180,180]`. `textPlane.attachment`, `.orientationMode`, `.rotationAxis`, and `.placementSpace` are readable/resettable constants but `set` has no branch for them.
+
+## 23.3 Exact public/semi-public types
+
+```ts
+type CameraMode = "locked" | "focus" | "free";
+type CameraPlacement = "inside" | "outside";
+type AssetHemisphere = "front" | "back";
+type GlbRuntimeStatus = "acknowledged" | "loading" | "loaded" | "retrying" | "failed";
+type FocusPlaybackMode = "zone-cycle" | "loop-item";
+type FocusPlaybackScope = "station" | "all";
+type FocusPlaybackOrder = "ordered" | "random";
+type PlaneTravelMode = "teleport" | "roller-coaster" | "custom";
+type UnpairedGlbCountPolicy = number | "all" | {mode:"range"; min:number; max:number};
+type PlanePreviewPolicy = {showGlbs:boolean; maxGlbs:number|"all"; representation?:"glb"|"icon"};
+type RandomGlbDiversityPolicy = {avoidWithinRun:boolean; avoidAdjacent:boolean; recentPlaneMultipliers:Record<number,number>};
+type PlaneResidencyPolicy = {mode:"cycles"|"songs"|"coverage"; value:number};
+type WeightedJourneyResource = {id:string; weight?:number; probability?:number};
+type JourneyResourcePool = {id:string; resources:WeightedJourneyResource[]};
+type TransitionResourcePolicy = {mode:"inherit"} | {mode:"preset"; resources:string[]} | {mode:"pool"; poolId:string};
+type JourneyMusicEvolutionPolicy = {presetJourneys:number; presetSequence:string[]; randomPoolId?:string; pools:JourneyResourcePool[]; transitionPolicies:Record<string,TransitionResourcePolicy>};
+type FocusPlaylistEntry = {stationId:string; stationIndex:number; assetName:string; track:string; url:string};
+type FocusPlaybackProgram = {scope?:FocusPlaybackScope; order?:FocusPlaybackOrder; sequence?:string[]; residency?:PlaneResidencyPolicy; travelMode?:PlaneTravelMode; customTravelId?:string; pools?:Array<{id:string; assets?:string[]; tracks?:string[]; order?:FocusPlaybackOrder; repeat?:number|"forever"}>};
+```
+
+`ObjectMotion` is `{type:"free"}` or `{type:"fixed", fixedMode:"anchored"|"range", range?, behavior?}`; behavior is `none`, `bob`, `sway`, or `orbit` with optional amplitude/speed. Anchored normalizes to `none`; range defaults to 0.8, bob, amplitude `min(range,.35)`, speed .7.
+
+`SpatialEnvelopeConfig` is `{mode:"bounds"|"manual", radius:number|null, scale:number, padding:number, collision:{enabled,restitution,mass,response:"dynamic"|"immovable"|"sensor"}, debug:{visible,opacity}}`. Defaults are bounds/null/1/.05; collision true/.62/1; response follows fixed (`immovable`) versus free (`dynamic`); debug false/.16.
+
+`EditLayerState` is `{mode:"none"}` or `{mode:"hemisphere", hemisphere, cameraPreset, repositionObjectName}`. Presets: `top`, `side`, `bottom-corner-up`, `top-left-down`.
+
+The older pure journey helper additionally exports `JourneyDirection`, `JourneyBoundary`, `JourneyScope`, `JourneyPhase`, `IntermissionStrategy`, `JourneyTarget`, `FocusJourneyConfig`, `JourneyState`, and `JourneyStep`. It is tested but is **not imported by the current renderer**, so its `idle/focus/intermission/travel` machine and explicit-route behavior are semi-public library capability, not live UI behavior.
+
+Core package contracts: `RevisionId`, `HealthState`, `WebRevRevision`, `HealthReport`, `InvariantResult`, `Invariant`, `InspectionDocument`, `DeploymentProvider`, `MediaPanel`, `LinksConfig`, `WebsiteConfigEntry`, and `WebsitesConfig`. Website categories/responsibilities are arrays (non-exclusive); resolution order is explicit route → explicit responsibility providers by priority → broad `cdn` category → `live`. Link targets preserve HTTP(S), protocol-relative, fragment, mailto and tel destinations; other values resolve against the deployment base and unknown keys throw.
+
+## 23.4 Event inventory
+
+All current events use default `bubbles:false`, `composed:false`, and `cancelable:false`, **except** `webrev:custom-plane-travel`, which is cancelable and is the sole extension hook. All others are observations; calling `preventDefault()` has no effect.
+
+| Event | Detail / timing |
+|---|---|
+| `webrev:webgl-context-lost` / `webrev:webgl-context-restored` | No detail; canvas context lifecycle. Loss handler prevents the native WebGL event default, not this window event. Restore recreates resources. |
+| `webrev:asset-runtime-status` | `{id,name,stationId,status,attempts,lastError?}` on GLB acknowledgement/load/retry/failure. |
+| `webrev:presentation-settings` | `{stationId,settings}` after settings persistence. |
+| `webrev:asset-station`, `asset-motion`, `asset-focus-audio`, `asset-track-exclusions`, `spatial-envelope`, `asset-placement` | Complete corresponding state map after mutation. |
+| `webrev:unpaired-glb-limit`, `plane-preview-policy` | Complete persisted policy map. |
+| `webrev:random-glb-diversity-policy` | Normalized runtime policy. |
+| `webrev:fallback-song-history-window` | `{count}`. |
+| `webrev:played-track-history` | `{recent:[],played:[]}` when explicitly cleared. |
+| `webrev:avoid-current-plane-songs` | `{enabled}`. |
+| `webrev:focus-playback-program` | Normalized runtime program after set/order update. |
+| `webrev:plane-residency-policy` | Normalized policy. |
+| `webrev:plane-travel-mode` | `{mode,customTravelId}`. |
+| `webrev:journey-music-evolution` | Complete normalized policy. |
+| `webrev:transition-resource-policy` | `{transitionId,policy}`. |
+| `webrev:journey-click-start`, `style-exploration-mode` | `{enabled}`. |
+| `webrev:style-snapshot-ready` | Generated snapshot after save. |
+| `webrev:custom-plane-travel` | `{fromStationId,toStationId,fromStationIndex,toStationIndex,customTravelId,complete}`. Listener must call `preventDefault()` to claim travel and eventually call `complete()`; otherwise renderer immediately falls back to teleport. |
+| `webrev:journey-transition` | `{transitionId,fromStationId,toStationId,completedJourneyCount,resource,policy}` before plane movement. |
+| `webrev:journey-completed` | `{completedJourneyCount}` after last→first wrap increments. |
+| `webrev:focus-object-step` | `{direction,stationId,objectName,track,journeyIndex,journeyLength}` after manual/automatic step. |
+| `webrev:focus-audio-playback-error` | `{assetName,url,message}` on rejected `audio.play()`. |
+| `webrev:focus-playlist-track` | `{mode,scope,order,stationId,stationIndex,assetName,track}` after catalog playlist advancement. |
+| `webrev:focus-experience-settled` | `{stationId,objectId,objectName,side,textSide}` after 1450 ms focus approach. |
+| `webrev:focus-experience-request` | Focus request observation with the selected object/station context. It is not cancelable. |
+
+## 23.5 Persistence contracts and provenance
+
+Malformed JSON is caught and treated as absent. Writes are also swallowed on storage/security/quota failure. Except where stated, stored browser values override authored config/defaults on reload and there is no migration beyond reading the one named legacy key.
+
+| Key | Shape, default, invalidation |
+|---|---|
+| `webrev:spatial-settings:v3` | `{stations: Record<stationId, PresentationSettingsSnapshot>}`. Per-field parse falls back to station → arrangement → built-in defaults. |
+| `webrev:spatial-settings:v2` | Legacy single settings object, read only as fallback for every station when v3 lacks it. |
+| `webrev:asset-placement:v3` | `Record<assetName,{hemisphere,visible}>`; default front/true. v3 intentionally invalidated older hidden-state behavior. |
+| `webrev:asset-station:v1` | `Record<assetName,stationId>`; invalid/missing assignment falls back to discovered prefix/config inference. |
+| `webrev:asset-motion:v1` | `Record<assetName,ObjectMotion>`; stored overrides `config.assetMotion`, then free default. |
+| `webrev:asset-focus-audio:v1` | `Record<assetName,{track:string}>`; stored overrides authored pairing. |
+| `webrev:asset-track-exclusions:v1` | `Record<assetName,string[]>`; normalized to unique existing catalog names. |
+| `webrev:spatial-envelope:v1` | `Record<assetName,SpatialEnvelopeConfig>`; stored entry overrides config and is normalized. |
+| `webrev:style-exploration:v1` | string boolean; default false. |
+| `webrev:journey-click-start:v1` | string boolean; default true. |
+| `webrev:unpaired-glb-limit:v2` | map with `global` or station keys; absent global defaults `{mode:"range",min:3,max:5}`. |
+| `webrev:plane-preview-policy:v1` | map of normalized policies; absent station resolves global then `{showGlbs:false,maxGlbs:0,representation:"glb"}`. |
+| `webrev:fallback-song-history-window:v2` | scalar numeric string; default 4, floor ≥0. |
+| `webrev:avoid-current-plane-songs:v1` | string boolean; default true. |
+
+Runtime-only (not durable): diversity policy/history, played/recent/unheard audio history, playback program, residency/travel policy, journey evolution, transition policies/recent choices, journey counters/cursor, layouts, load status, camera/focus state, and renderer resources.
+
+## 23.6 Authored configuration and asset discovery
+
+The active presentation JSON is schema version 2. Server-side component setup uses `import.meta.glob` to discover 2D (`png,jpg,jpeg,webp,avif,svg`), center (`*-center`), 3D (`glb,gltf`) and music (`mp3,wav,ogg,m4a,aac,flac`) modules. Names are filenames. A discovered asset is assigned to the first station whose `artworkName` is a filename prefix followed by `-`; assets without that match enter the global/unpaired library. Bundled `*-center` assets override a bare configured `centerImage` URL.
+
+Authored top-level inputs currently consumed include `schemaVersion`, title, `rail`, `arrangement`, `stations`, `assetActions`, `assetMotion`, `assetEnvelope`, focus-audio/pairing data, and server-derived `assetsByArtwork`, `assetInventory`, `musicTracks`, `centerImagesByArtwork`, and `resolvedLinks`. Station inputs include stable `id`, `artworkName`, label/theme/text/reveal, display/layer/occlusion, center/main image, plus per-station sphere/camera/viewport/placement/interaction/focusAudio/debug/textPlane overrides. Actions are station, semantic link, raw URL, or text. Semantic links resolve from `config/links.json`; raw action URLs remain an explicitly supported action type.
+
+Provenance order is generally **localStorage → station config → arrangement config → built-in default** for editable settings, while station assignment uses persisted override → discovery inference. Layout positions are generated using the authored seeded arrangement inputs, then mutated by simulation/editor/focus. Random GLB sampling uses `Math.random`, so the `seeded-once` label does not make all selection deterministic.
+
+## 23.7 Coordinates and rendering
+
+* `stationZ(i) = -i * rail.stationSpacing`; `stationCenter(i)` is the image/world center for that station. The station-local origin is therefore the main image center.
+* `SceneObject.local` is relative to station center. World position is `stationCenter + local`. `anchor` is local; `camera-midpoint` recomputes an anchor between the camera and image center plus `anchorOffset`.
+* Front hemisphere is positive local Z; back is negative. The entire object envelope/model is constrained inside the selected half of the station sphere. Fixed objects are immovable by default; free objects are dynamic.
+* Camera world position is derived from current rail `cameraZ`, camera distance/placement, focus offsets or editor pose. Camera space applies translated world coordinates followed by yaw and pitch. Projection produces canvas pixels, positive depth, and perspective scale. `lastScreen` is `{x,y,radius,depth}` from the latest draw and is absent when no screen result was retained.
+* Main images are Three.js 5.4×5.9 planes at station center, billboarded to the camera outside editor mode. Text is a separate transparent texture plane positioned in image-relative space with axis-angle rotation about the center horizontal line. GLB groups use world position, scalar `size`, and spin; loaded model bounds/radius feed containment and collision.
+* Canvas CSS pixels and renderer pixels differ: Three renderer pixel ratio is capped at 2. Debug snapshot screen values are canvas/CSS coordinates, not device pixels.
+
+## 23.8 Live journey and travel state machine
+
+1. At rest, `arrivingAt` identifies the current/target plane and `arrived()` compares `cameraZ` to `targetZ`.
+2. Selecting a visible GLB starts focus interpolation. Translation freezes at `baseLocal`, presentation bob/spin continues, and after 1450 ms focus settles and audio fades in.
+3. `zone-cycle` advances when audio ends; `loop-item` loops. The journey list is anchored to the actually focused object and advances object-by-object.
+4. At list end, cycle/song/coverage residency decides whether to wrap the current plane or call `continueJourneyToNextPlane`.
+5. Plane continuation resolves and announces transition resources, counts a last→first full journey, builds the destination list, stores its first entry as pending, then requests travel.
+6. Teleport sets destination immediately. Roller-coaster changes target Z and update moves by `rail.speed * dt`. Custom dispatches the cancelable hook; unclaimed custom travel teleports.
+7. On arrival, a pending destination object is found in the current layout and normal `playJourneyEntry` resumes focus/audio. Missing objects simply prevent that focus continuation.
+
+The implementation does not expose a first-class travel enum internally. Deep Debug derives `idle`, `roller-coaster`, or `focus-transition`; it cannot yet distinguish an in-flight claimed custom hook from teleport after the request. The pure `focusJourney.ts` intermission machine is not wired to this live path. “Intermission” in current rendering is transition-resource selection/event metadata, not guaranteed audio playback.
+
+## 23.9 Music resolution precedence
+
+For a focused object, an explicit persisted/configured pairing wins. For an unpaired GLB, candidates begin with the globally unassigned catalog (tracks not fixed to any GLB), remove that object's Track Exclusions, and—when enabled—prefer tracks not already represented on the current plane. Resolution then prefers session-unheard tracks, avoids the recent URL window, and relaxes constraints when a pool empties: allow recently heard, then allow previously heard, then fall back through the broader non-excluded catalog so silence is avoided where possible. Playback records URL in recent history and the session ledger; plane journey tracking records tracks for residency/current-plane avoidance.
+
+Transition resources are separate: `preset` selects by completed-journey position; `pool` first evaluates each resource's clamped exact `probability` in array order, then chooses from remaining resources by nonnegative relative `weight` (default 1), with recent-history avoidance/relaxation. `inherit` uses the evolution preset sequence during the preset journey count, then the configured random pool. Transition lookup supports exact `from->to` and wildcard policies as normalized by source. Exact probability is sequential, not a normalized simultaneous distribution.
+
+Journey prefixes, nested playlists, completion branches, conditional/additive/multiplicative modifiers, guaranteed follow-ups, and the seven-scope precedence (`journey → plane → transition → travel-mode → object → playlist → track`) are **proposed only**. No stable serialized orchestration ABI implements them today.
+
+## 23.10 Random GLB and preview rules
+
+The global unpaired uploaded-GLB pool supplies extras per plane. Count policy is station override → global → random integer 3–5. A number is floored ≥0, `all` uses inventory size, and range endpoints normalize/swap. Sampling is without replacement within one plane. Default diversity prefers no within-run duplicate and adjacent avoidance; recency multipliers are distance 1 = .5 and distance 2 = .8. The weighted sampler multiplies every applicable prior-plane factor with a floor of .0001, so “avoid” is preference rather than an absolute ban when inventory is constrained. Inventory shortage naturally returns fewer than requested; later planes may reuse assets. Selection uses `Math.random`; layout rebuilds can change selections.
+
+Distant planes default to no GLBs. Preview policy can show up to a number or `all`, using `glb` or `icon`; representation `icon` is accepted by the contract, but the current renderer does not provide a complete separate icon resource pipeline. Main image/text visibility has independent renderer logic.
+
+## 23.11 Renderer lifecycle and degradation
+
+GLBs progress through acknowledged/loading/loaded/retrying/failed; attempt/error maps and events make failures observable. Rebuild pruning disposes geometry, materials and textures for no-longer-referenced objects. WebGL loss is prevented, announced, and restoration recreates renderer-held resources. The ordinary 2D canvas/site remains separate from experimental GLB loading. Missing main images use a generated fallback texture; audio autoplay rejection leaves the focus visible and emits a structured error; localStorage failures degrade to in-memory/default behavior; unhandled custom travel degrades to teleport.
+
+# 24. Deep Debug / Agent Introspection API — current v1 foundation
+
+`window.webrevDebug` is a read-only, JSON-serializable facade. It does not expose internal references and has no mutation commands.
+
+```ts
+interface WebRevDebugApiV1 {
+  readonly schemaVersion: 1;
+  getDebugSnapshot(): WebRevDebugSnapshotV1;
+  getPlaneDebugState(stationId?: string): object | null;
+  getObjectDebugState(nameOrId: string): object | null;
+  getJourneyDebugState(): object;
+  getRendererDebugState(): object;
+  getAudioDebugState(): object;
+  getRandomizationDebugState(): object;
+}
+```
+
+The snapshot currently includes capture time/route/viewport; every plane and its identity/center/navigation flags/preview policy/resource residency/random sample; every layout object with local/world/latest-screen position, size/spin/hemisphere/visibility, motion/anchor/envelope/bounds, focus/audio/exclusion and GLB load/residency data; camera pose/target/arrival; derived travel state; journey cursor/counters/residency/pending entry; audio element and history; randomization policy/history; and renderer counts/context status.
+
+### Current limitations (do not infer these fields)
+
+* Revision/build identity is available from `/.well-known/webrev.json`, not yet joined into the live snapshot.
+* “Rendered last frame” means a visible object has a retained `lastScreen`; it is not a frame-numbered GPU draw receipt. Screen bounds are radius-based, not an exact projected GLB box.
+* Main-image/text load failures, last context loss/restore timestamps, stale GPU count, travel source/initiator/progress, fade progress, unheard candidates, resolver candidate/exclusion trace, authored-vs-storage provenance per field, and custom-travel in-flight state are not yet captured.
+* No `subscribeDebug` exists yet; callers poll or listen to the event inventory. No authorization boundary exists, so the snapshot intentionally excludes secrets and write operations.
+
+### Proposed versioned target (not implemented)
+
+A future schema v2 should add stable `build/revision`, per-value `{value,source}` provenance, frame identity, exact rendered/culling receipts, source/destination/progress/initiator for every travel mode, resolver decision traces, WebGL timestamps/stale resources, and a single `subscribeDebug(listener)` stream. Schema additions must be additive within a version; breaking changes require a new `schemaVersion` and migration notes. Stable IDs—not array indices—must link journey, plane, transition, travel mode, object, playlist and track records. Extension/provider and future WASM boundaries should consume serialized, validated records rather than renderer internals.
+
+# 25. Current versus proposed capability matrix
+
+| Area | Current | Proposed only |
+|---|---|---|
+| Revision inspection | Static schema-1 endpoint and core invariant | Runtime snapshot join, revision graph, authorized deployment metadata |
+| Journey | Live object/plane loop; runtime program/residency/travel controls | Durable nested orchestration and full scoped inheritance |
+| Travel | Teleport, rail interpolation, cancelable custom hook | Stable provider interface, effects segments, complete progress telemetry |
+| Music | Pairing, exclusions, fallback history, transition probability/weight pools | Nested playlists, conditions/modifiers/branches/explanation ledger |
+| Manifest | Presentation schema 2 config plus schema-1 style export | Validated portable import/publish manifest and migrations |
+| Rendering | Canvas + isolated Three resources, status events | Exact frame graph, stale-resource accounting, environment spheres |
+| Debug | Read-only `webrevDebug` schema 1 | Subscription, provenance, decision traces, auth/redaction policy |
+| Karaoke/effects | None in live renderer | Portable timed-performance format, warped credit plane, segment effects |
+
+# 26. Known mismatches and technical debt
+
+1. The previous API document omitted the complete event/storage/config/type inventories and the implemented preview, music-evolution and transition-resource APIs; this audit makes them explicit.
+2. The live renderer and the pure `focusJourney.ts` helper contain two journey models; the helper is tested but unused by `SpatialPresentation`, creating divergence risk.
+3. Runtime types are declared inside one `.astro` script and are not importable declarations; consumers must copy/infer them. Extracting a versioned contract module is the recommended next step.
+4. `listAssets()` attempts are aggregated by IDs containing the asset name, whereas `getAssetRuntimeStatus()` uses the same heuristic and Deep Debug can use exact object ID; these summaries can differ for repeated instances.
+5. GLB status is published by object but stored partly by asset name and partly by object ID. This prevents perfect per-instance failure inspection.
+6. The manifest says `seeded-once`, but random GLB/music choices use `Math.random`; rebuilds are nondeterministic.
+7. `representation:"icon"` is accepted without a complete distinct rendering contract.
+8. Persistent browser overrides can supersede changed code/config indefinitely; only placement v3 documents intentional invalidation, and there is no user-visible provenance/migration report.
+9. Proposed orchestration syntax and seven-scope precedence are not an implementation contract. Current transition pools provide only a small subset.
+10. Deep Debug v1 is renderer-local and read-only by design, but lacks subscription, revision join, exact draw receipts and detailed resolver explanations.
+
+# 27. Source-of-truth map and recommended next step
+
+* Browser API, renderer, configuration normalization, events, persistence, journey/music/random selection: `apps/playground/src/components/SpatialPresentation.astro`.
+* Motion, sphere/coordinates, envelope/collision, editor camera, focus composition and legacy journey primitives: `apps/playground/src/lib/*.ts`.
+* Authored presentation: `config/presentations/uniqueness-rewarded.json`; semantic navigation: `config/links.json`; origins/responsibilities: `config/websites.json`.
+* Generic revision/health/provider/config APIs: `packages/core/src`; Astro route injection: `packages/astro/src`.
+* Product intent only: `docs/journey` and `docs/proposals`; these do not override executable source.
+
+**Recommended next implementation:** extract `WebRevDebugSnapshotV1`, browser API types, event-detail map, and normalized orchestration primitives into a small importable versioned contract module; add snapshot contract tests and a debug subscription driven by a single frame/state revision counter. Then add explicit provenance and resolver decision traces before expanding mutation/orchestration syntax. This stabilizes the API/ABI boundary while retaining unlimited upward composition across the seven required scopes.
