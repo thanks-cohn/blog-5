@@ -1019,7 +1019,27 @@ Explicit authored media-envelope bindings still override this project fallback.
 
 ### Default oversphere video selection
 
-When a song starts and no explicit media-envelope binding matches it, the runtime now falls back to the shared `oversphere/videos` pool automatically.
+The project fallback oversphere is now **opt-in** for the default website. The current project configuration sets:
+
+```json
+{
+  "enabled": false
+}
+```
+
+So ordinary focused-object playback does not automatically create the oversphere.
+
+The runtime API controls this independently of authored media-envelope programs:
+
+```js
+api.getOversphereEnabled()
+api.setOversphereEnabled(true)
+api.setOversphereEnabled(false)
+```
+
+Disabling it immediately tears down an active default oversphere, but does not disable explicitly authored media-envelope programs or remove the oversphere implementation.
+
+When enabled, if a song starts and no explicit media-envelope binding matches it, the runtime falls back to the shared `oversphere/videos` pool automatically.
 
 Default behavior:
 
