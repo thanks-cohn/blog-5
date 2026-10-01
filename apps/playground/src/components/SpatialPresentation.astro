@@ -3433,6 +3433,7 @@ const runtimeConfig = {
       let journeyPlaneSongCount = 0;
       let journeyPlaneCyclesCompleted = 0;
       const journeyPlanePlayedTracks = new Set<string>();
+      const journeyPlaneVisitedObjects = new Set<string>();
 
       function generateAllLayouts() {
         randomGlbSelectionHistory = [];
@@ -6963,6 +6964,21 @@ const runtimeConfig = {
         journeyPlaneSongCount = 0;
         journeyPlaneCyclesCompleted = 0;
         journeyPlanePlayedTracks.clear();
+        journeyPlaneVisitedObjects.clear();
+      }
+
+      function currentPlaneEligibleObjectNames() {
+        const entries =
+          journeyStationIndex === arrivingAt && journeyEntries.length
+            ? journeyEntries
+            : planeJourneyEntries(arrivingAt);
+        return [...new Set(entries.map((entry) => entry.assetName).filter(Boolean))];
+      }
+
+      function currentPlaneObjectCoverageComplete() {
+        const eligible = currentPlaneEligibleObjectNames();
+        if (!eligible.length) return true;
+        return eligible.every((name) => journeyPlaneVisitedObjects.has(name));
       }
 
       function shouldRemainOnCurrentPlane() {
@@ -6995,6 +7011,8 @@ const runtimeConfig = {
         // Resolve at playback time so paired tracks, object exclusions,
         // recent-history rules, and unpaired fallback selection all share one path.
         const chosen = focusTrackForObject(obj);
+
+        journeyPlaneVisitedObjects.add(entry.assetName);
 
         if (chosen) {
           journeyPlaneSongCount += 1;
@@ -7127,12 +7145,18 @@ const runtimeConfig = {
         if (direction > 0) {
           if (journeyCursor >= journeyEntries.length - 1) {
             journeyPlaneCyclesCompleted += 1;
-            if (shouldRemainOnCurrentPlane()) {
+
+            // Manual left/right navigation is plane-locked until every
+            // eligible object on this plane has actually been focused at
+            // least once. Merely reaching/wrapping the numeric cursor is not
+            // sufficient proof that the visitor completed the plane.
+            if (!currentPlaneObjectCoverageComplete() || shouldRemainOnCurrentPlane()) {
               journeyCursor = 0;
               const first = journeyEntries[0];
               if (first) playJourneyEntry(first);
               return;
             }
+
             continueJourneyToNextPlane();
             return;
           }
@@ -7155,7 +7179,9 @@ const runtimeConfig = {
             objectName: next.assetName,
             track: next.track,
             journeyIndex: journeyCursor,
-            journeyLength: journeyEntries.length
+            journeyLength: journeyEntries.length,
+            visitedObjects: [...journeyPlaneVisitedObjects],
+            objectCoverageComplete: currentPlaneObjectCoverageComplete()
           }
         }));
       }
