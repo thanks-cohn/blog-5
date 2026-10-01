@@ -955,9 +955,13 @@ The current v1 renderer:
 - resolves the origin from the focused object (or station center)
 - computes a radius large enough to contain the current and next main-panel regions plus configurable padding/panel allowance
 - creates curved, tessellated media patches on the sphere surface
-- places the patches in an even spherical grid centered on the current camera/focus direction
+- can place focus media on the far inner wall along the settled camera-to-focus view ray
+- supports explicit fixed sphere radius for authored distance control
+- places ordinary grid patches around a camera/focus-centered spherical layout
 - keeps tile vertical orientation stable against world-up
-- avoids configurable angular protected regions for the current and next main panels
+- supports configurable angular protected regions; an explicit empty list disables those exclusions
+- supports foreground depth mode so authored media need not be occluded by scene images/GLBs
+- supports temporary culling of stations outside the active envelope for lower rendering cost
 - supports image and video textures
 - grows the whole envelope into view
 - supports `promote` / `scale`, `fade-others`, `hide-others`, `fade`, and `hide` choreography cues
@@ -1019,10 +1023,10 @@ When a song starts and no explicit media-envelope binding matches it, the runtim
 Default behavior:
 
 - one video is selected for the focused item/song
-- that video loops for the duration of that focus/song
+- the current project fallback video is non-looping and can end its temporary oversphere lifecycle
 - no object-to-video pairing is required
-- the selector avoids the last **2** videos globally
-- when enough candidates remain, it also avoids every video used on the **previous plane**
+- the selector avoids the configured recent window globally (currently **3**)
+- when enough candidates remain, it avoids videos already used on the **current plane**; previous-plane avoidance is optional
 - if the pool is too small to satisfy an exclusion, that exclusion is relaxed rather than producing no media
 - with exactly 3 videos, the last-two rule naturally forces rotation through all three
 - with a larger pool, selection is random among eligible candidates
@@ -1056,6 +1060,90 @@ type OversphereVideoSelectionPolicy = {
 ```
 
 This is a project-default policy built on the generic media-envelope API. Future authored per-song/per-object pools can replace it without changing the renderer.
+
+### Oversphere radius
+
+The project fallback oversphere has an explicit runtime radius. This radius controls the distance from the focus origin to the inner media wall:
+
+- smaller radius = media appears closer;
+- larger radius = media appears farther away.
+
+```js
+api.getOversphereRadius()
+
+api.setOversphereRadius(6)
+```
+
+The value is independent from the ordinary station sphere settings and is intended to remain authorable by future Studio/UI layers.
+
+Generic media-envelope programs can also provide their own fixed radius through:
+
+```ts
+envelope: {
+  shape: "sphere",
+  radius: 6
+}
+```
+
+If a program omits a fixed radius, the generic resolver may still derive one from its coverage settings.
+
+### Oversphere inspection mode
+
+Inspection mode is a first-class camera/debug capability, not a hard-coded keyboard feature.
+
+It keeps the current focused camera position fixed while allowing unrestricted look-around orientation. The active oversphere, video, object focus, and media playback continue running normally. This is useful for determining whether media exists elsewhere on the inner sphere when it is not visible in the normal authored camera composition.
+
+```js
+api.enterOversphereInspectMode()
+api.exitOversphereInspectMode()
+api.getOversphereInspectState()
+```
+
+`enterOversphereInspectMode()` returns `false` when there is no focused object or active media envelope to inspect.
+
+The state shape is:
+
+```ts
+{
+  active: boolean;
+  pointerLocked: boolean;
+  keyBinding: {
+    enter: string | null;
+    exit: string | null;
+  };
+}
+```
+
+Input bindings are deliberately separate from the inspection behavior:
+
+```js
+api.setOversphereInspectKeyBinding({
+  enter: "I",
+  exit: "Shift+Escape"
+})
+```
+
+Either binding can be disabled with `null`:
+
+```js
+api.setOversphereInspectKeyBinding({
+  enter: null,
+  exit: null
+})
+```
+
+This allows future interfaces to bind inspection to any keyboard shortcut, mouse control, gamepad input, Studio button, agent action, or other command source without changing the inspection implementation itself.
+
+The current experience right-click menu may expose **Inspect Oversphere** as a convenience UI over the same API.
+
+Inspection events:
+
+```text
+webrev:oversphere-inspect
+webrev:oversphere-inspect-binding
+```
+
+`webrev:oversphere-inspect` reports whether inspection became active or inactive. `webrev:oversphere-inspect-binding` reports the current configurable keyboard binding.
 
 
 ### Minimal example

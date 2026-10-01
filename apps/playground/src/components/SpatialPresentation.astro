@@ -696,6 +696,23 @@ const runtimeConfig = {
         setOversphereVideoSelectionPolicy(patch: Partial<OversphereVideoSelectionPolicy>): OversphereVideoSelectionPolicy;
         getOversphereRadius(): number;
         setOversphereRadius(radius: number): number;
+        enterOversphereInspectMode(): boolean;
+        exitOversphereInspectMode(): boolean;
+        getOversphereInspectState(): {
+          active: boolean;
+          pointerLocked: boolean;
+          keyBinding: {
+            enter: string | null;
+            exit: string | null;
+          };
+        };
+        setOversphereInspectKeyBinding(binding: {
+          enter?: string | null;
+          exit?: string | null;
+        }): {
+          enter: string | null;
+          exit: string | null;
+        };
         getOversphereVideoHistory(): {
           recent: string[];
           currentPlane: string[];
@@ -3441,6 +3458,16 @@ const runtimeConfig = {
         cameraStart: Vec3;
       };
       let focusExperience: FocusExperienceState | null = null;
+      let oversphereInspectMode = false;
+      let oversphereInspectReturnYaw = 0;
+      let oversphereInspectReturnPitch = 0;
+      let oversphereInspectKeyBinding: {
+        enter: string | null;
+        exit: string | null;
+      } = {
+        enter: null,
+        exit: "Shift+Escape"
+      };
       let pendingFocusPlaylistEntry: FocusPlaylistEntry | null = null;
       let journeyEntries: FocusPlaylistEntry[] = [];
       let journeyCursor = -1;
@@ -5616,6 +5643,40 @@ const runtimeConfig = {
           }));
           return defaultOversphereRadius;
         },
+        enterOversphereInspectMode() {
+          return enterOversphereInspectMode();
+        },
+        exitOversphereInspectMode() {
+          return exitOversphereInspectMode();
+        },
+        getOversphereInspectState() {
+          return {
+            active: oversphereInspectMode,
+            pointerLocked: document.pointerLockElement === gameCanvas,
+            keyBinding: { ...oversphereInspectKeyBinding }
+          };
+        },
+        setOversphereInspectKeyBinding(binding: {
+          enter?: string | null;
+          exit?: string | null;
+        }) {
+          if (Object.prototype.hasOwnProperty.call(binding, "enter")) {
+            oversphereInspectKeyBinding.enter =
+              typeof binding.enter === "string" && binding.enter.trim()
+                ? binding.enter.trim()
+                : null;
+          }
+          if (Object.prototype.hasOwnProperty.call(binding, "exit")) {
+            oversphereInspectKeyBinding.exit =
+              typeof binding.exit === "string" && binding.exit.trim()
+                ? binding.exit.trim()
+                : null;
+          }
+          window.dispatchEvent(new CustomEvent("webrev:oversphere-inspect-binding", {
+            detail: { ...oversphereInspectKeyBinding }
+          }));
+          return { ...oversphereInspectKeyBinding };
+        },
         getOversphereVideoHistory() {
           return {
             recent: [...oversphereRecentVideoIds],
@@ -7514,6 +7575,7 @@ const runtimeConfig = {
       }
 
       function endFocusExperience() {
+        exitOversphereInspectMode();
         fadeOutFocusAudio();
         if (!focusExperience) return;
         const obj = focusExperience.object;
@@ -7529,6 +7591,8 @@ const runtimeConfig = {
         if (editPose) {
           targetYaw = editPose.yaw;
           targetPitch = editPose.pitch;
+        } else if (oversphereInspectMode && focusExperience?.stationIndex === arrivingAt) {
+          // Inspection owns yaw/pitch while the focus camera position remains fixed.
         } else if (focusExperience && focusExperience.stationIndex === arrivingAt) {
           const center = stationCenter(arrivingAt);
           const cam = cameraPosition();
@@ -7675,7 +7739,10 @@ const runtimeConfig = {
           const cam = cameraPosition();
           threeCamera.position.set(cam.x, cam.y, cam.z);
 
-          if (focusExperience && focusExperience.stationIndex === arrivingAt) {
+          if (oversphereInspectMode && focusExperience?.stationIndex === arrivingAt) {
+            threeCamera.rotation.order = "YXZ";
+            threeCamera.rotation.set(lookPitch, lookYaw, 0);
+          } else if (focusExperience && focusExperience.stationIndex === arrivingAt) {
             const center = stationCenter(arrivingAt);
             const target = {
               x: center.x + focusExperience.targetOffsetX,
@@ -7870,6 +7937,51 @@ const runtimeConfig = {
         editContextMenu.appendChild(wrap);
       }
 
+      function enterOversphereInspectMode() {
+        if (!focusExperience || !activeMediaEnvelope) return false;
+        oversphereInspectReturnYaw = lookYaw;
+        oversphereInspectReturnPitch = lookPitch;
+        oversphereInspectMode = true;
+        targetYaw = lookYaw;
+        targetPitch = lookPitch;
+        void gameCanvas.requestPointerLock?.();
+        status && (status.textContent =
+          "Inspect Oversphere · move mouse to look freely");
+        window.dispatchEvent(new CustomEvent("webrev:oversphere-inspect", {
+          detail: { active: true }
+        }));
+        return true;
+      }
+
+      function exitOversphereInspectMode() {
+        if (!oversphereInspectMode) return false;
+        oversphereInspectMode = false;
+        if (document.pointerLockElement === gameCanvas) {
+          document.exitPointerLock?.();
+        }
+        lookYaw = oversphereInspectReturnYaw;
+        lookPitch = oversphereInspectReturnPitch;
+        targetYaw = oversphereInspectReturnYaw;
+        targetPitch = oversphereInspectReturnPitch;
+        status && (status.textContent = focusExperience
+          ? `Come Into Our World · ${focusExperience.object.name}`
+          : `Back at ${stations[arrivingAt]?.label ?? "this plane"}`);
+        window.dispatchEvent(new CustomEvent("webrev:oversphere-inspect", {
+          detail: { active: false }
+        }));
+        return true;
+      }
+
+      function normalizedInspectShortcut(event: KeyboardEvent) {
+        const parts: string[] = [];
+        if (event.ctrlKey) parts.push("Ctrl");
+        if (event.altKey) parts.push("Alt");
+        if (event.shiftKey) parts.push("Shift");
+        if (event.metaKey) parts.push("Meta");
+        parts.push(event.key.length === 1 ? event.key.toUpperCase() : event.key);
+        return parts.join("+");
+      }
+
       function openExperienceContextMenu(clientX: number, clientY: number, obj: SceneObject | null) {
         if (!editContextMenu) return;
         editContextMenu.replaceChildren();
@@ -7910,7 +8022,20 @@ const runtimeConfig = {
         );
 
         if (focusExperience && focusExperience.stationIndex === arrivingAt) {
-          addEditContextAction("Leave for now <3", () => endFocusExperience());
+          if (activeMediaEnvelope) {
+            addEditContextAction(
+              oversphereInspectMode ? "Inspect Oversphere ✓" : "Inspect Oversphere",
+              () => {
+                if (oversphereInspectMode) exitOversphereInspectMode();
+                else enterOversphereInspectMode();
+              },
+              oversphereInspectMode
+            );
+          }
+          addEditContextAction("Leave for now <3", () => {
+            exitOversphereInspectMode();
+            endFocusExperience();
+          });
         }
 
         if (obj?.kind === "3d") {
@@ -8035,6 +8160,17 @@ const runtimeConfig = {
         const y = event.clientY - rect.top;
         pointerX = x;
         pointerY = y;
+
+        if (oversphereInspectMode && document.pointerLockElement === gameCanvas) {
+          const sensitivity = 0.0024;
+          targetYaw -= event.movementX * sensitivity;
+          targetPitch = Math.max(
+            -Math.PI * 0.49,
+            Math.min(Math.PI * 0.49, targetPitch - event.movementY * sensitivity)
+          );
+          gameCanvas.style.cursor = "none";
+          return;
+        }
 
         if (grabbed) {
           const now = performance.now();
@@ -8191,7 +8327,33 @@ const runtimeConfig = {
       });
 
       window.addEventListener("keydown", (event) => {
+        const inspectShortcut = normalizedInspectShortcut(event);
+
+        if (
+          oversphereInspectMode &&
+          oversphereInspectKeyBinding.exit &&
+          inspectShortcut === oversphereInspectKeyBinding.exit
+        ) {
+          event.preventDefault();
+          closeEditContextMenu();
+          exitOversphereInspectMode();
+          return;
+        }
+
+        if (
+          !oversphereInspectMode &&
+          oversphereInspectKeyBinding.enter &&
+          inspectShortcut === oversphereInspectKeyBinding.enter
+        ) {
+          if (enterOversphereInspectMode()) {
+            event.preventDefault();
+            closeEditContextMenu();
+            return;
+          }
+        }
+
         if (event.key === "Escape") {
+          if (oversphereInspectMode) return;
           event.preventDefault();
           closeEditContextMenu();
           if (focusExperience && focusExperience.stationIndex === arrivingAt) {
