@@ -278,6 +278,25 @@ const runtimeConfig = {
     | { mode: "cycles"; value: number }
     | { mode: "songs"; value: number }
     | { mode: "coverage"; value: number };
+  type WeightedJourneyResource = {
+    id: string;
+    weight?: number;
+  };
+  type JourneyResourcePool = {
+    id: string;
+    resources: WeightedJourneyResource[];
+  };
+  type TransitionResourcePolicy =
+    | { mode: "inherit" }
+    | { mode: "preset"; resources: string[] }
+    | { mode: "pool"; poolId: string };
+  type JourneyMusicEvolutionPolicy = {
+    presetJourneys: number;
+    presetSequence: string[];
+    randomPoolId?: string;
+    pools: JourneyResourcePool[];
+    transitionPolicies: Record<string, TransitionResourcePolicy>;
+  };
   type FocusPlaybackProgram = {
     scope?: FocusPlaybackScope;
     order?: FocusPlaybackOrder;
@@ -449,6 +468,13 @@ const runtimeConfig = {
         setPlaneResidencyPolicy(policy: PlaneResidencyPolicy): PlaneResidencyPolicy;
         getPlaneTravelMode(): PlaneTravelMode;
         setPlaneTravelMode(mode: PlaneTravelMode, customTravelId?: string): PlaneTravelMode;
+        getJourneyMusicEvolution(): JourneyMusicEvolutionPolicy;
+        setJourneyMusicEvolution(policy: Partial<JourneyMusicEvolutionPolicy>): JourneyMusicEvolutionPolicy;
+        getCompletedJourneyCount(): number;
+        resetCompletedJourneyCount(): number;
+        getTransitionResourcePolicy(transitionId: string): TransitionResourcePolicy | null;
+        setTransitionResourcePolicy(transitionId: string, policy: TransitionResourcePolicy): TransitionResourcePolicy;
+        resolveTransitionResource(transitionId: string): string | null;
         travelToPlane(stationId: string, mode?: PlaneTravelMode, customTravelId?: string): boolean;
         getStyleExplorationMode(): boolean;
         setStyleExplorationMode(enabled: boolean): boolean;
@@ -521,6 +547,144 @@ const runtimeConfig = {
     customTravelId: "",
     pools: []
   };
+
+  let completedJourneyCount = 0;
+  let journeyMusicEvolution: JourneyMusicEvolutionPolicy = {
+    presetJourneys: 2,
+    presetSequence: [],
+    randomPoolId: "",
+    pools: [],
+    transitionPolicies: {}
+  };
+
+  function normalizeWeightedResources(value: unknown): WeightedJourneyResource[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((entry: any) => {
+        if (typeof entry === "string") return { id: entry, weight: 1 };
+        if (!entry || typeof entry.id !== "string" || !entry.id) return null;
+        const rawWeight = Number(entry.weight);
+        return {
+          id: entry.id,
+          weight:
+            Number.isFinite(rawWeight) && rawWeight > 0
+              ? rawWeight
+              : 1
+        };
+      })
+      .filter((entry): entry is WeightedJourneyResource => Boolean(entry));
+  }
+
+  function normalizeTransitionPolicy(value: any): TransitionResourcePolicy {
+    if (value?.mode === "preset") {
+      return {
+        mode: "preset",
+        resources: Array.isArray(value.resources)
+          ? value.resources.filter((entry: unknown): entry is string =>
+              typeof entry === "string" && entry.length > 0
+            )
+          : []
+      };
+    }
+    if (value?.mode === "pool") {
+      return {
+        mode: "pool",
+        poolId: typeof value.poolId === "string" ? value.poolId : ""
+      };
+    }
+    return { mode: "inherit" };
+  }
+
+  function normalizeJourneyMusicEvolution(
+    value: Partial<JourneyMusicEvolutionPolicy> | undefined
+  ): JourneyMusicEvolutionPolicy {
+    const pools = Array.isArray(value?.pools)
+      ? value.pools
+          .map((pool: any) => ({
+            id: typeof pool?.id === "string" ? pool.id : "",
+            resources: normalizeWeightedResources(pool?.resources)
+          }))
+          .filter((pool) => pool.id.length > 0)
+      : [];
+
+    const transitionPolicies: Record<string, TransitionResourcePolicy> = {};
+    for (const [id, policy] of Object.entries(value?.transitionPolicies ?? {})) {
+      if (!id) continue;
+      transitionPolicies[id] = normalizeTransitionPolicy(policy);
+    }
+
+    return {
+      presetJourneys: Math.max(
+        0,
+        Math.floor(Number(value?.presetJourneys) || 0)
+      ),
+      presetSequence: Array.isArray(value?.presetSequence)
+        ? value.presetSequence.filter(
+            (entry): entry is string =>
+              typeof entry === "string" && entry.length > 0
+          )
+        : [],
+      randomPoolId:
+        typeof value?.randomPoolId === "string"
+          ? value.randomPoolId
+          : "",
+      pools,
+      transitionPolicies
+    };
+  }
+
+  function weightedJourneyResource(
+    resources: WeightedJourneyResource[]
+  ): string | null {
+    const recent = new Set(
+      playedTrackHistory.slice(-Math.max(0, fallbackSongHistoryWindow))
+    );
+    const nonRecent = resources.filter((entry) => !recent.has(entry.id));
+    const candidates = nonRecent.length ? nonRecent : resources;
+    if (!candidates.length) return null;
+
+    const total = candidates.reduce(
+      (sum, entry) => sum + Math.max(0.0001, Number(entry.weight) || 1),
+      0
+    );
+    let pick = Math.random() * total;
+    for (const entry of candidates) {
+      pick -= Math.max(0.0001, Number(entry.weight) || 1);
+      if (pick <= 0) return entry.id;
+    }
+    return candidates[candidates.length - 1]?.id ?? null;
+  }
+
+  function transitionResourcePolicy(
+    transitionId: string
+  ): TransitionResourcePolicy | null {
+    const direct = journeyMusicEvolution.transitionPolicies[transitionId];
+    if (direct && direct.mode !== "inherit") return direct;
+    const wildcard = journeyMusicEvolution.transitionPolicies["*"];
+    if (wildcard && wildcard.mode !== "inherit") return wildcard;
+    return null;
+  }
+
+  function resolveTransitionResourceInternal(
+    transitionId: string
+  ): string | null {
+    const policy = transitionResourcePolicy(transitionId);
+    if (!policy) return null;
+
+    if (policy.mode === "preset") {
+      if (!policy.resources.length) return null;
+      const index = Math.min(
+        Math.max(0, completedJourneyCount),
+        policy.resources.length - 1
+      );
+      return policy.resources[index] ?? policy.resources[0] ?? null;
+    }
+
+    const pool = journeyMusicEvolution.pools.find(
+      (candidate) => candidate.id === policy.poolId
+    );
+    return pool ? weightedJourneyResource(pool.resources) : null;
+  }
 
   // These live at presentation scope so the public API and the focused
   // journey runtime share one source of truth.
@@ -2507,6 +2671,55 @@ const runtimeConfig = {
           }
         }));
         return normalized;
+      },
+      getJourneyMusicEvolution() {
+        return JSON.parse(JSON.stringify(journeyMusicEvolution));
+      },
+      setJourneyMusicEvolution(policy: Partial<JourneyMusicEvolutionPolicy>) {
+        journeyMusicEvolution = normalizeJourneyMusicEvolution({
+          ...journeyMusicEvolution,
+          ...policy,
+          pools: policy?.pools ?? journeyMusicEvolution.pools,
+          transitionPolicies:
+            policy?.transitionPolicies ?? journeyMusicEvolution.transitionPolicies
+        });
+        window.dispatchEvent(new CustomEvent("webrev:journey-music-evolution", {
+          detail: JSON.parse(JSON.stringify(journeyMusicEvolution))
+        }));
+        return JSON.parse(JSON.stringify(journeyMusicEvolution));
+      },
+      getCompletedJourneyCount() {
+        return completedJourneyCount;
+      },
+      resetCompletedJourneyCount() {
+        completedJourneyCount = 0;
+        return completedJourneyCount;
+      },
+      getTransitionResourcePolicy(transitionId: string) {
+        const policy = transitionResourcePolicy(String(transitionId || ""));
+        return policy ? JSON.parse(JSON.stringify(policy)) : null;
+      },
+      setTransitionResourcePolicy(
+        transitionId: string,
+        policy: TransitionResourcePolicy
+      ) {
+        const id = String(transitionId || "").trim();
+        if (!id) return { mode: "inherit" } as TransitionResourcePolicy;
+        const normalized = normalizeTransitionPolicy(policy);
+        journeyMusicEvolution = {
+          ...journeyMusicEvolution,
+          transitionPolicies: {
+            ...journeyMusicEvolution.transitionPolicies,
+            [id]: normalized
+          }
+        };
+        window.dispatchEvent(new CustomEvent("webrev:transition-resource-policy", {
+          detail: { transitionId: id, policy: normalized }
+        }));
+        return JSON.parse(JSON.stringify(normalized));
+      },
+      resolveTransitionResource(transitionId: string) {
+        return resolveTransitionResourceInternal(String(transitionId || ""));
       },
       travelToPlane(stationId: string, mode: PlaneTravelMode = "teleport", customTravelId = "") {
         const index = stations.findIndex((station: any) => station.id === stationId);
@@ -5166,7 +5379,34 @@ const runtimeConfig = {
 
       function continueJourneyToNextPlane() {
         if (!stations.length) return;
+        const fromStationIndex = arrivingAt;
         const nextStationIndex = (arrivingAt + 1) % stations.length;
+        const fromStationId = stations[fromStationIndex]?.id ?? String(fromStationIndex);
+        const toStationId = stations[nextStationIndex]?.id ?? String(nextStationIndex);
+        const transitionId = `${fromStationId}→${toStationId}`;
+        const transitionResource = resolveTransitionResourceInternal(transitionId);
+
+        window.dispatchEvent(new CustomEvent("webrev:journey-transition", {
+          detail: {
+            transitionId,
+            fromStationId,
+            toStationId,
+            completedJourneyCount,
+            resource: transitionResource,
+            policy: transitionResourcePolicy(transitionId)
+          }
+        }));
+
+        if (
+          fromStationIndex === stations.length - 1 &&
+          nextStationIndex === 0
+        ) {
+          completedJourneyCount += 1;
+          window.dispatchEvent(new CustomEvent("webrev:journey-completed", {
+            detail: { completedJourneyCount }
+          }));
+        }
+
         const nextEntries = planeJourneyEntries(nextStationIndex);
         const next = nextEntries[0];
 
