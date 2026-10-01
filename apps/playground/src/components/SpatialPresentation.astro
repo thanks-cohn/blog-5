@@ -2285,7 +2285,9 @@ const runtimeConfig = {
           : { mode: "none" },
         textPlane: {
           enabled: typeof raw?.textPlane?.enabled === "boolean" ? raw.textPlane.enabled : defaults.textPlane.enabled,
-          color: typeof raw?.textPlane?.color === "string" ? raw.textPlane.color : defaults.textPlane.color,
+          // Public presentation styling is authored in JSON. Do not let stale
+          // local settings from an earlier editor session override plaque color.
+          color: defaults.textPlane.color,
           width: Number.isFinite(Number(raw?.textPlane?.width)) ? Math.max(0.2, Number(raw.textPlane.width)) : defaults.textPlane.width,
           height: Number.isFinite(Number(raw?.textPlane?.height)) ? Math.max(0.15, Number(raw.textPlane.height)) : defaults.textPlane.height,
           offsetY:
@@ -6871,9 +6873,21 @@ const runtimeConfig = {
         }
 
         const text = current && paperTextOverride ? paperTextOverride : station.text ?? {};
-        const title = String(text.title ?? station.label ?? "");
+        const title = String(text.title ?? "");
         const body = String(text.body ?? "");
-        const signature = [title, body, settings.color, settings.width, settings.height].join("|");
+        const authoredTextPlane = config.arrangement?.textPlane ?? {};
+        const plaqueColor = String(authoredTextPlane.color ?? settings.color ?? "#ff2bd6");
+        const textColor = String(authoredTextPlane.textColor ?? "#f7ff00");
+        const fontFamily = String(authoredTextPlane.fontFamily ?? "Rock Salt");
+        const signature = [
+          title,
+          body,
+          plaqueColor,
+          textColor,
+          fontFamily,
+          settings.width,
+          settings.height
+        ].join("|");
         let entry = textPlanes.get(station.id);
 
         if (!entry || entry.signature !== signature) {
@@ -6889,40 +6903,54 @@ const runtimeConfig = {
           textureCanvas.height = 256;
           const tctx = textureCanvas.getContext("2d");
           if (!tctx) return;
-          tctx.fillStyle = settings.color;
+          // The public plaque is deliberately vivid and JSON-authoritative.
+          tctx.fillStyle = plaqueColor;
           tctx.fillRect(0, 0, 1024, 256);
 
-          const textPlaneConfig = config.arrangement?.textPlane ?? {};
-          const fontFamily = String(textPlaneConfig.fontFamily ?? "Rock Salt");
-          const textColor = String(textPlaneConfig.textColor ?? "#f7ff00");
+          // A small darker inner border makes the neon pink read as a physical plaque.
+          tctx.strokeStyle = "rgba(93,0,71,.72)";
+          tctx.lineWidth = 8;
+          tctx.strokeRect(12, 12, 1000, 232);
+
+          tctx.textBaseline = "middle";
+          tctx.textAlign = "center";
+          tctx.font = `400 25px "${fontFamily}", "Comic Sans MS", cursive`;
           tctx.fillStyle = textColor;
-          tctx.textBaseline = "top";
+          tctx.strokeStyle = "rgba(64,49,0,.58)";
+          tctx.lineWidth = 3;
+          tctx.shadowColor = textColor;
+          tctx.shadowBlur = 13;
 
-          const titleText = title.trim();
-          if (titleText) {
-            tctx.font = `400 32px "${fontFamily}", cursive`;
-            tctx.fillText(titleText, 48, 24, 928);
-          }
-
-          tctx.font = `400 24px "${fontFamily}", cursive`;
-          const words = body.split(/\s+/);
+          const words = body.trim().split(/\s+/).filter(Boolean);
+          const lines: string[] = [];
           let line = "";
-          let y = titleText ? 88 : 42;
           for (const word of words) {
             const candidate = line ? `${line} ${word}` : word;
-            if (tctx.measureText(candidate).width > 920 && line) {
-              tctx.fillText(line, 48, y);
+            if (tctx.measureText(candidate).width > 850 && line) {
+              lines.push(line);
               line = word;
-              y += 38;
-              if (y > 214) break;
             } else {
               line = candidate;
             }
           }
-          if (line && y <= 214) tctx.fillText(line, 48, y);
+          if (line) lines.push(line);
+
+          const lineHeight = 52;
+          const totalHeight = Math.max(lineHeight, lines.length * lineHeight);
+          let y = 128 - totalHeight / 2 + lineHeight / 2;
+          for (const renderedLine of lines.slice(0, 4)) {
+            tctx.strokeText(renderedLine, 512, y, 900);
+            tctx.fillText(renderedLine, 512, y, 900);
+            y += lineHeight;
+          }
+
+          // CanvasTexture normally uploads automatically, but make the first
+          // presentation frame explicit so text cannot remain a blank texture.
+          tctx.shadowBlur = 0;
 
           const T3:any = THREE;
           const texture = new T3.CanvasTexture(textureCanvas);
+          texture.needsUpdate = true;
           const geometry = new T3.PlaneGeometry(settings.width, settings.height);
           const material = new T3.MeshBasicMaterial({
             map: texture,
