@@ -4172,6 +4172,9 @@ const runtimeConfig = {
         let preferred = randomGlbDiversityPolicy.avoidWithinRun
           ? unpaired3d.filter((asset: any) => !usedEarlier.has(asset.name))
           : [...unpaired3d];
+        const afterWithinRunCandidates = preferred.map(
+          (asset: any) => String(asset.name)
+        );
 
         // Adjacent-plane repeats are a stronger visual repetition, so avoid them
         // whenever there are enough alternatives.
@@ -4182,6 +4185,10 @@ const runtimeConfig = {
           if (nonAdjacent.length >= targetCount) preferred = nonAdjacent;
         }
 
+        const afterAdjacentCandidates = preferred.map(
+          (asset: any) => String(asset.name)
+        );
+
         let sampledUnpaired = weightedRandomGlbSample(
           preferred,
           Math.min(targetCount, preferred.length),
@@ -4191,6 +4198,7 @@ const runtimeConfig = {
 
         // If the never-used pool is exhausted, fill from previously used GLBs,
         // still preferring non-adjacent choices and applying distance penalties.
+        let fallbackCandidates: string[] = [];
         if (sampledUnpaired.length < targetCount) {
           const selectedNames = new Set(
             sampledUnpaired.map((asset: any) => asset.name)
@@ -4207,6 +4215,10 @@ const runtimeConfig = {
               fallbackPool = nonAdjacentFallback;
             }
           }
+
+          fallbackCandidates = fallbackPool.map(
+            (asset: any) => String(asset.name)
+          );
 
           sampledUnpaired = [
             ...sampledUnpaired,
@@ -4261,7 +4273,12 @@ const runtimeConfig = {
             previousPlane: [...previousPlane]
           },
           candidates: {
-            afterWithinRunFilter: preferred.map((asset: any) => String(asset.name))
+            beforeDiversityFilters: unpaired3d.map(
+              (asset: any) => String(asset.name)
+            ),
+            afterWithinRunFilter: afterWithinRunCandidates,
+            afterAdjacentFilter: afterAdjacentCandidates,
+            fallbackPool: fallbackCandidates
           },
           selectedRandomGlbs: sampledUnpaired.map((asset: any) => String(asset.name)),
           explanation:
