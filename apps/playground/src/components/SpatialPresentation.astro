@@ -772,7 +772,7 @@ const runtimeConfig = {
   const textPlanes = new Map<string, { mesh: any; texture: any; signature: string }>();
 
   // Canvas text must be regenerated after the Google Font becomes available.
-  void document.fonts?.load('600 52px "Cormorant Garamond"').then(() => {
+  void document.fonts?.load('400 24px "Rock Salt"').then(() => {
     for (const entry of textPlanes.values()) {
       entry.mesh.parent?.remove?.(entry.mesh);
       entry.mesh.geometry?.dispose?.();
@@ -6262,6 +6262,57 @@ const runtimeConfig = {
       }
 
       function drawBackground() {
+        const background = config.arrangement?.background ?? {};
+        const useStarfield = background.mode === "starfield" || background.stars === true;
+
+        if (useStarfield) {
+          ctx.fillStyle = String(background.color ?? "#000000");
+          ctx.fillRect(0, 0, width, height);
+
+          const now = performance.now();
+          for (let i = 0; i < 96; i++) {
+            const x = (i * 193.1 + (i % 7) * 31.7) % Math.max(1, width);
+            const y = (i * 91.7 + (i % 11) * 17.3) % Math.max(1, height);
+            const twinkle = 0.38 + 0.42 * (0.5 + 0.5 * Math.sin(now * 0.0013 + i * 1.77));
+            const size = i % 13 === 0 ? 1.8 : i % 5 === 0 ? 1.25 : 0.8;
+            ctx.fillStyle = `rgba(255,255,255,${twinkle.toFixed(3)})`;
+            ctx.fillRect(x, y, size, size);
+          }
+
+          if (background.shootingStars === true) {
+            const period = 6400;
+            for (let i = 0; i < 3; i++) {
+              const phase = ((now + i * 2170) % period) / period;
+              if (phase >= 0.18) continue;
+              const t = phase / 0.18;
+              const startX = width * (0.12 + i * 0.28);
+              const startY = height * (0.10 + (i % 2) * 0.14);
+              const x = startX + width * 0.42 * t;
+              const y = startY + height * 0.22 * t;
+              const tail = 95 + i * 18;
+
+              const gradient = ctx.createLinearGradient(
+                x - tail,
+                y - tail * 0.52,
+                x,
+                y
+              );
+              gradient.addColorStop(0, "rgba(255,255,255,0)");
+              gradient.addColorStop(
+                1,
+                `rgba(255,255,255,${(1 - t * 0.55).toFixed(3)})`
+              );
+              ctx.strokeStyle = gradient;
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(x - tail, y - tail * 0.52);
+              ctx.lineTo(x, y);
+              ctx.stroke();
+            }
+          }
+          return;
+        }
+
         const g = ctx.createRadialGradient(
           width * 0.5, height * 0.42, 10,
           width * 0.5, height * 0.5, Math.max(width, height) * 0.78
@@ -6841,31 +6892,34 @@ const runtimeConfig = {
           tctx.fillStyle = settings.color;
           tctx.fillRect(0, 0, 1024, 256);
 
-          const raw = settings.color.replace("#", "");
-          const rr = parseInt(raw.slice(0,2),16) || 255;
-          const gg = parseInt(raw.slice(2,4),16) || 255;
-          const bb = parseInt(raw.slice(4,6),16) || 255;
-          const lum = (0.2126*rr + 0.7152*gg + 0.0722*bb)/255;
-          tctx.fillStyle = lum > 0.55 ? "#171717" : "#f7f7f7";
+          const textPlaneConfig = config.arrangement?.textPlane ?? {};
+          const fontFamily = String(textPlaneConfig.fontFamily ?? "Rock Salt");
+          const textColor = String(textPlaneConfig.textColor ?? "#f7ff00");
+          tctx.fillStyle = textColor;
           tctx.textBaseline = "top";
-          tctx.font = '600 52px "Cormorant Garamond", Georgia, serif';
-          tctx.fillText(title, 54, 28, 916);
-          tctx.font = '400 34px "Cormorant Garamond", Georgia, serif';
 
+          const titleText = title.trim();
+          if (titleText) {
+            tctx.font = `400 32px "${fontFamily}", cursive`;
+            tctx.fillText(titleText, 48, 24, 928);
+          }
+
+          tctx.font = `400 24px "${fontFamily}", cursive`;
           const words = body.split(/\s+/);
-          let line = "", y = 108;
+          let line = "";
+          let y = titleText ? 88 : 42;
           for (const word of words) {
             const candidate = line ? `${line} ${word}` : word;
-            if (tctx.measureText(candidate).width > 916 && line) {
-              tctx.fillText(line, 54, y);
+            if (tctx.measureText(candidate).width > 920 && line) {
+              tctx.fillText(line, 48, y);
               line = word;
-              y += 42;
-              if (y > 205) break;
+              y += 38;
+              if (y > 214) break;
             } else {
               line = candidate;
             }
           }
-          if (line && y <= 205) tctx.fillText(line, 54, y);
+          if (line && y <= 214) tctx.fillText(line, 48, y);
 
           const T3:any = THREE;
           const texture = new T3.CanvasTexture(textureCanvas);
@@ -8753,7 +8807,7 @@ const runtimeConfig = {
 </script>
 
 <style>
-  @import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap");
+  @import url("https://fonts.googleapis.com/css2?family=Rock+Salt&display=swap");
 
   .presentation {
     position:fixed;
@@ -9203,13 +9257,13 @@ const runtimeConfig = {
       0 24px 70px rgba(0,0,0,.5),
       0 0 0 1px rgba(255,190,214,.07) inset;
     backdrop-filter:blur(18px) saturate(1.15);
-    font-family:"Cormorant Garamond", Georgia, serif;
+    font-family:"Rock Salt", cursive;
   }
 
   .edit-context-heading {
     padding:9px 11px 7px;
     color:rgba(255,221,233,.72);
-    font:500 13px/1.2 "Cormorant Garamond", Georgia, serif;
+    font:500 13px/1.2 "Rock Salt", cursive;
     letter-spacing:.09em;
     text-transform:uppercase;
   }
@@ -9224,7 +9278,7 @@ const runtimeConfig = {
     padding:10px 12px;
     text-align:left;
     cursor:pointer;
-    font:500 17px/1.2 "Cormorant Garamond", Georgia, serif;
+    font:500 17px/1.2 "Rock Salt", cursive;
     letter-spacing:.01em;
     transition:background 140ms ease, transform 140ms ease, color 140ms ease;
   }
