@@ -5508,6 +5508,15 @@ const runtimeConfig = {
       });
 
       window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeEditContextMenu();
+          if (focusExperience && focusExperience.stationIndex === arrivingAt) {
+            endFocusExperience();
+            status && (status.textContent = `Back at ${stations[arrivingAt]?.label ?? "this plane"}`);
+          }
+          return;
+        }
         if (event.key === "ArrowRight") {
           event.preventDefault();
           if (focusExperience) {
