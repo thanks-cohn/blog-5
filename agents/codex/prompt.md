@@ -645,3 +645,150 @@ Do not:
 
 The purpose of this run is to **make the existing system legible and contract-driven**, and establish the foundation for structured live introspection.
 
+
+
+---
+
+# Granular probabilistic orchestration direction
+
+The API must eventually support deeply composable probability-driven behavior across multiple scopes without requiring core-engine rewrites.
+
+This is not limited to simple shuffle or one weight per song.
+
+The design target is **maximum optional granularity on top of stable contracts**:
+
+- simple projects should remain simple
+- advanced projects should be able to express unusually sophisticated authored behavior
+- future creators should compose primitives into complex systems rather than require a new hard-coded engine feature for every idea
+- the API should support visionary complexity without forcing that complexity on ordinary users
+- the foundation should feel effectively open-ended: new behaviors should be buildable upward through composition, extension points, adapters, and data-driven programs
+- stable API/ABI boundaries are more important than preserving any one internal implementation
+- public contracts should evolve conservatively, with versioning/migration rather than silent breakage
+- implementation details may change while serialized programs, manifests, and public contracts remain durable
+- avoid special-case logic tied to one song, one plane, one transition, or one project
+- prefer generic primitives that can be reused indefinitely
+
+Where ABI-like boundaries exist or can reasonably be introduced, document them explicitly.
+
+Examples include:
+
+- serialized manifest/program schemas
+- event detail contracts
+- provider/adaptor interfaces
+- custom travel hooks
+- debug snapshot schemas
+- stable identifiers
+- versioned persisted state
+- future WASM/host boundaries
+
+The orchestration model must be able to distinguish at least these scopes:
+
+```text
+journey
+plane
+transition
+travel-mode
+object
+playlist
+track
+```
+
+Do not collapse these into one ambiguous "context" field.
+
+Rules should support inheritance and override across scopes.
+
+A conceptual precedence may look like:
+
+```text
+journey/global defaults
+→ plane
+→ transition
+→ travel mode
+→ object
+→ playlist
+→ track
+```
+
+This is only a design direction; Codex must document current behavior separately from proposed behavior.
+
+The API should eventually be able to express:
+
+- exact probability, e.g. `0.20`
+- relative weight, e.g. `0.4`
+- guaranteed behavior, e.g. probability `1.0`
+- ordered prefixes
+- preferred-first resources
+- weighted remainder pools
+- nested playlists and pools
+- exact-probability members mixed with weighted members
+- conditional boosts
+- conditional suppression
+- additive probability changes
+- multiplicative weight changes
+- recent-history penalties
+- completion-dependent changes
+- guaranteed follow-ups
+- rule phases / configurations
+- restart the same playlist under a new configuration
+- branch to another playlist after completion
+- branch based on partial vs full completion
+- per-plane policy
+- per-transition policy
+- per-travel-mode policy
+- roller-coaster-specific behavior
+- teleport/programmatic-specific behavior
+- custom-travel-specific behavior
+- per-object policy
+- per-playlist policy
+- per-track policy
+- whole-journey policy
+- future provider/media-source policy
+
+Example conceptual program:
+
+```text
+Object A
+→ Playlist A has 20% exact probability
+→ Playlist B and C compete by weight otherwise
+
+If Playlist A starts:
+→ Song X has 20% probability to play first
+→ Song Y has 21%
+→ Song Z has 10%
+→ Song Q has 5%
+→ remaining songs share leftover probability using weight 0.2
+
+If Playlist A completes fully:
+→ restart Playlist A under Configuration B
+→ boost Playlist B by +20 percentage points
+
+After Playlist B completes:
+→ play Song R with certainty
+→ then choose from S/T/U/V using another probability/weight rule
+→ then continue to Playlist E
+
+During Plane B → Plane C by roller-coaster:
+→ use a transition-specific intermission pool
+
+During Plane B → Plane C by teleport:
+→ suppress intermission audio
+
+On flint.glb:
+→ exclude Track Q
+→ prefer Playlist C by weight 0.4
+```
+
+The important requirement is not this exact syntax.
+
+The important requirement is that the primitives are expressive enough to represent behavior at this level without hard-coding the specific story into the engine.
+
+Execution history should be rich enough to explain **why** a rule fired, including:
+
+- which scope supplied the rule
+- which condition matched
+- which probability/weight was used
+- which candidates were excluded
+- what prior completion/history modified the decision
+- what fallback path was taken
+
+This explanation data should eventually be visible through the Deep Debug / Agent Introspection API.
