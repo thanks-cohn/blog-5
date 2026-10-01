@@ -5061,12 +5061,21 @@ const runtimeConfig = {
           )
         );
         const selected = selectDefaultOversphereVideo(stationIndex);
+        const focusedObject = mediaEnvelopeFocusedObject(
+          stationIndex,
+          typeof context.focusedAssetName === "string"
+            ? context.focusedAssetName
+            : ""
+        );
+        const viewportSideOffset =
+          focusedObject?.local.x < 0 ? 18 : -18;
         const programId = "__default-oversphere-video__";
         const program: MediaEnvelopeProgram = {
           id: programId,
           envelope: {
             shape: "sphere",
             origin: { mode: "focused-object" },
+            radius: defaultOversphereRadius,
             growth: {
               mode: "timed",
               durationMs: 1200,
@@ -5084,18 +5093,7 @@ const runtimeConfig = {
             orientation: { mode: "upright-to-world" },
             depthMode: "foreground"
           },
-          protectedRegions: [
-            {
-              target: "current-main-panel",
-              mode: "avoid",
-              angularRadiusDeg: 18
-            },
-            {
-              target: "next-main-panel",
-              mode: "avoid",
-              angularRadiusDeg: 18
-            }
-          ],
+          protectedRegions: [],
           layout: {
             mode: "hero",
             rows: 1,
@@ -5105,7 +5103,7 @@ const runtimeConfig = {
             gapDeg: 0,
             tileAngularWidthDeg: 56,
             tileAngularHeightDeg: 34,
-            azimuthOffsetDeg: 18,
+            azimuthOffsetDeg: viewportSideOffset,
             elevationOffsetDeg: 4
           },
           media: selected
@@ -5113,11 +5111,18 @@ const runtimeConfig = {
                 id: selected.id,
                 type: "video",
                 src: selected.url,
-                loop: true,
+                loop: false,
                 muted: true,
                 opacity: 1
               }]
-            : []
+            : [],
+          lifecycle: {
+            endOnMediaEnd: true
+          },
+          performance: {
+            cullOutsideEnvelope: true,
+            restoreOutsideAfterMs: 180
+          }
         };
         mediaEnvelopePrograms.set(programId, program);
         return activateMediaEnvelopeInternal(
