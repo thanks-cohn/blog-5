@@ -915,6 +915,7 @@ const runtimeConfig = {
         threeRetryAt.clear();
         debugGlobes.clear();
         envelopeDebugGlobes.clear();
+        activeMediaEnvelope = null;
         ensureThree();
         window.dispatchEvent(new CustomEvent("webrev:webgl-context-restored"));
       });
