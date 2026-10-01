@@ -1,0 +1,9 @@
+{
+  "selection": {
+    "avoidRecent": 3,
+    "avoidCurrentPlane": true,
+    "avoidPreviousPlane": false,
+    "pairingRequired": false
+  },
+  "videos": []
+}

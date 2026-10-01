@@ -966,6 +966,52 @@ The current v1 renderer:
 
 Discovered image/video assets under `apps/playground/src/assets/**` are available by file name/path through the generic media catalog. The current shared test-video pool is reserved at `apps/playground/src/assets/oversphere/videos/`.
 
+### Remote oversphere URL pool
+
+The current project can source oversphere videos from:
+
+```text
+apps/playground/src/assets/oversphere/locations/urls.json
+```
+
+This JSON is a project configuration source layered over the generic Spatial Media Envelope API. The renderer does not know about Cloudflare or any specific CDN; it only receives normalized media sources.
+
+Current shape:
+
+```json
+{
+  "selection": {
+    "avoidRecent": 3,
+    "avoidCurrentPlane": true,
+    "avoidPreviousPlane": false,
+    "pairingRequired": false
+  },
+  "videos": [
+    {
+      "id": "memory-01",
+      "name": "Memory 01",
+      "url": "https://cdn.example.com/memory-01.mp4"
+    }
+  ]
+}
+```
+
+Bare URL strings are also accepted inside `videos`, but object entries with stable `id` values are recommended for readable history/debugging.
+
+The project may contain roughly 20 or more remote URLs without placing the video files in Git. Local MP4/WebM files under `assets/oversphere/videos/` remain supported and are merged into the same normalized source pool.
+
+Selection currently prefers:
+
+- one video per focused item/song;
+- no video already used on the current plane, while unused candidates remain;
+- no video from the last `avoidRecent` global selections (currently `3`);
+- optional previous-plane exclusion when enabled;
+- graceful relaxation of exclusions when the pool is too small.
+
+Explicit authored media-envelope bindings still override this project fallback.
+
+---
+
 ### Default oversphere video selection
 
 When a song starts and no explicit media-envelope binding matches it, the runtime now falls back to the shared `oversphere/videos` pool automatically.
@@ -988,7 +1034,7 @@ The policy is intentionally exposed instead of hard-coded:
 api.getOversphereVideoSelectionPolicy()
 
 api.setOversphereVideoSelectionPolicy({
-  avoidRecent: 2,
+  avoidRecent: 3,
   avoidPreviousPlane: true,
   pairingRequired: false
 })
@@ -1002,6 +1048,7 @@ The current policy type is:
 ```ts
 type OversphereVideoSelectionPolicy = {
   avoidRecent: number;
+  avoidCurrentPlane: boolean;
   avoidPreviousPlane: boolean;
   pairingRequired: boolean;
   selection: "random";

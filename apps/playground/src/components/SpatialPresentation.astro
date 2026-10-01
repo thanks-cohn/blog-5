@@ -1,4 +1,5 @@
 ---
+import oversphereLocations from "../assets/oversphere/locations/urls.json";
 export interface Props {
   config: any;
   homeHref: string;
@@ -53,14 +54,44 @@ const discoveredOversphereVideos = import.meta.glob("../assets/oversphere/videos
   import: "default"
 }) as Record<string, string>;
 
-const oversphereVideos = Object.entries(discoveredOversphereVideos)
+const oversphereLocalVideos = Object.entries(discoveredOversphereVideos)
   .map(([path, url]) => ({
     id: path.split("/").pop() ?? path,
     name: path.split("/").pop() ?? path,
     path,
-    url
+    url,
+    source: "local"
   }))
   .sort((a, b) => a.name.localeCompare(b.name));
+
+function normalizedOversphereUrlVideos(value: any) {
+  const entries = Array.isArray(value?.videos) ? value.videos : [];
+  return entries
+    .map((entry: any, index: number) => {
+      if (typeof entry === "string") {
+        const url = entry.trim();
+        if (!url) return null;
+        return {
+          id: url,
+          name: `remote-${index + 1}`,
+          url,
+          source: "url"
+        };
+      }
+      if (!entry || typeof entry.url !== "string" || !entry.url.trim()) return null;
+      const url = entry.url.trim();
+      return {
+        id: String(entry.id ?? url),
+        name: String(entry.name ?? entry.id ?? `remote-${index + 1}`),
+        url,
+        source: "url"
+      };
+    })
+    .filter(Boolean);
+}
+
+const oversphereUrlVideos = normalizedOversphereUrlVideos(oversphereLocations);
+const oversphereVideos = [...oversphereUrlVideos, ...oversphereLocalVideos];
 
 const mediaEnvelopeMedia = Object.entries(discoveredEnvelopeMedia)
   .map(([path, url]) => ({
@@ -111,6 +142,7 @@ const runtimeConfig = {
   musicTracks,
   mediaEnvelopeMedia,
   oversphereVideos,
+  oversphereLocations,
   resolvedLinks: links
 };
 ---
@@ -364,6 +396,7 @@ const runtimeConfig = {
 
   type OversphereVideoSelectionPolicy = {
     avoidRecent: number;
+    avoidCurrentPlane: boolean;
     avoidPreviousPlane: boolean;
     pairingRequired: boolean;
     selection: "random";
@@ -1267,10 +1300,23 @@ const runtimeConfig = {
 
     let activeMediaEnvelope: ActiveMediaEnvelope | null = null;
 
+    const configuredOversphereSelection =
+      config.oversphereLocations?.selection &&
+      typeof config.oversphereLocations.selection === "object"
+        ? config.oversphereLocations.selection
+        : {};
+
     let oversphereVideoSelectionPolicy: OversphereVideoSelectionPolicy = {
-      avoidRecent: 2,
-      avoidPreviousPlane: true,
-      pairingRequired: false,
+      avoidRecent: Math.max(
+        0,
+        Math.floor(Number(configuredOversphereSelection.avoidRecent ?? 3) || 0)
+      ),
+      avoidCurrentPlane:
+        configuredOversphereSelection.avoidCurrentPlane !== false,
+      avoidPreviousPlane:
+        configuredOversphereSelection.avoidPreviousPlane === true,
+      pairingRequired:
+        configuredOversphereSelection.pairingRequired === true,
       selection: "random"
     };
     let oversphereRecentVideoIds: string[] = [];
@@ -4865,6 +4911,10 @@ const runtimeConfig = {
               Number(value?.avoidRecent ?? oversphereVideoSelectionPolicy.avoidRecent) || 0
             )
           ),
+          avoidCurrentPlane:
+            typeof value?.avoidCurrentPlane === "boolean"
+              ? value.avoidCurrentPlane
+              : oversphereVideoSelectionPolicy.avoidCurrentPlane,
           avoidPreviousPlane:
             typeof value?.avoidPreviousPlane === "boolean"
               ? value.avoidPreviousPlane
@@ -4907,6 +4957,20 @@ const runtimeConfig = {
         if (!candidates.length) candidates = [...videos];
 
         if (
+          oversphereVideoSelectionPolicy.avoidCurrentPlane &&
+          oversphereCurrentPlaneVideoIds.length
+        ) {
+          const currentPlaneBlocked = new Set(oversphereCurrentPlaneVideoIds);
+          const withoutCurrentPlane = candidates.filter(
+            (video: any) => !currentPlaneBlocked.has(video.id)
+          );
+          // Current-plane uniqueness is preferred whenever the pool can satisfy it.
+          // If every remaining candidate has already appeared on this plane, relax
+          // this rule rather than leaving the focused item without media.
+          if (withoutCurrentPlane.length) candidates = withoutCurrentPlane;
+        }
+
+        if (
           oversphereVideoSelectionPolicy.avoidPreviousPlane &&
           overspherePreviousPlaneVideoIds.length
         ) {
@@ -4940,6 +5004,10 @@ const runtimeConfig = {
             stationId: oversphereHistoryStationId,
             videoId: selected.id,
             recentExcluded: [...recentBlocked],
+            currentPlaneExcluded:
+              oversphereVideoSelectionPolicy.avoidCurrentPlane
+                ? [...new Set(oversphereCurrentPlaneVideoIds)]
+                : [],
             previousPlaneExcluded:
               oversphereVideoSelectionPolicy.avoidPreviousPlane
                 ? [...overspherePreviousPlaneVideoIds]
