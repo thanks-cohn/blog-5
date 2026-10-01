@@ -1,5 +1,7 @@
 # WebRev Spatial Presentation API
 
+> The portable, versioned deep-debug contracts are documented separately in [Runtime inspection and deep-debug contracts](../RUNTIME_INSPECTION.md). They separate read-only inspection from trusted recording and renderer observations from orchestration intent. The browser API below has not yet been adapted to publish those contracts.
+
 ## Purpose
 
 This document describes the **current public runtime API** exposed by the Blog 5 spatial presentation engine through:
