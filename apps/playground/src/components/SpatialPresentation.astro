@@ -352,6 +352,7 @@ const runtimeConfig = {
     envelope?: {
       shape?: "sphere";
       origin?: { mode?: "focused-object" | "station-center"; offset?: Vec3 };
+      radius?: number;
       growth?: { mode?: "instant" | "timed"; durationMs?: number; easing?: "linear" | "easeOutCubic" };
     };
     coverage?: {
@@ -387,6 +388,13 @@ const runtimeConfig = {
     choreography?: {
       clock?: "binding";
       cues?: Array<Record<string, unknown>>;
+    };
+    lifecycle?: {
+      endOnMediaEnd?: boolean;
+    };
+    performance?: {
+      cullOutsideEnvelope?: boolean;
+      restoreOutsideAfterMs?: number;
     };
   };
 
@@ -1330,6 +1338,11 @@ const runtimeConfig = {
     let oversphereCurrentPlaneVideoIds: string[] = [];
     let overspherePreviousPlaneVideoIds: string[] = [];
     let oversphereHistoryStationId: string | null = null;
+    let defaultOversphereRadius = Math.max(
+      3,
+      Number(config.oversphereLocations?.presentation?.radius ?? 7) || 7
+    );
+    let mediaEnvelopeOutsideRestoreAt = 0;
 
     function loadUnpairedGlbLimits() {
       let stored: Record<string, unknown> = {};
@@ -4748,6 +4761,11 @@ const runtimeConfig = {
         stationIndex: number,
         origin: Vec3
       ) {
+        const fixedRadius = Number(program.envelope?.radius);
+        if (Number.isFinite(fixedRadius) && fixedRadius > 0) {
+          return Math.max(2, fixedRadius);
+        }
+
         const coverage = program.coverage ?? {};
         const include = new Set(
           Array.isArray(coverage.include) && coverage.include.length
@@ -4829,7 +4847,7 @@ const runtimeConfig = {
         origin: Vec3
       ) {
         const policies =
-          Array.isArray(program.protectedRegions) && program.protectedRegions.length
+          Array.isArray(program.protectedRegions)
             ? program.protectedRegions
             : [
                 { target: "current-main-panel", mode: "avoid", angularRadiusDeg: 18 },
