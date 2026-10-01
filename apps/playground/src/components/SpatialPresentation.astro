@@ -696,6 +696,8 @@ const runtimeConfig = {
         activateMediaEnvelope(programId: string, context?: Record<string, unknown>): boolean;
         deactivateMediaEnvelope(): void;
         getActiveMediaEnvelopeState(): MediaEnvelopeRuntimeState;
+        getOversphereEnabled(): boolean;
+        setOversphereEnabled(enabled: boolean): boolean;
         getOversphereVideoSelectionPolicy(): OversphereVideoSelectionPolicy;
         setOversphereVideoSelectionPolicy(patch: Partial<OversphereVideoSelectionPolicy>): OversphereVideoSelectionPolicy;
         getOversphereRadius(): number;
@@ -1353,6 +1355,9 @@ const runtimeConfig = {
       typeof config.oversphereLocations.selection === "object"
         ? config.oversphereLocations.selection
         : {};
+
+    let defaultOversphereEnabled =
+      config.oversphereLocations?.enabled === true;
 
     let oversphereVideoSelectionPolicy: OversphereVideoSelectionPolicy = {
       avoidRecent: Math.max(
@@ -5312,6 +5317,7 @@ const runtimeConfig = {
         trigger: Extract<MediaEnvelopeTrigger, { type: "song" }>,
         context: Record<string, unknown>
       ) {
+        if (!defaultOversphereEnabled) return false;
         if (oversphereVideoSelectionPolicy.pairingRequired) return false;
 
         const stationIndex = Math.max(
@@ -5919,6 +5925,22 @@ const runtimeConfig = {
         },
         getActiveMediaEnvelopeState() {
           return mediaEnvelopeDebugState();
+        },
+        getOversphereEnabled() {
+          return defaultOversphereEnabled;
+        },
+        setOversphereEnabled(enabled: boolean) {
+          defaultOversphereEnabled = Boolean(enabled);
+          if (
+            !defaultOversphereEnabled &&
+            activeMediaEnvelope?.program.id === "__default-oversphere-video__"
+          ) {
+            disposeActiveMediaEnvelope();
+          }
+          window.dispatchEvent(new CustomEvent("webrev:oversphere-enabled", {
+            detail: { enabled: defaultOversphereEnabled }
+          }));
+          return defaultOversphereEnabled;
         },
         getOversphereVideoSelectionPolicy() {
           return { ...oversphereVideoSelectionPolicy };
