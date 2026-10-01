@@ -964,7 +964,7 @@ The current v1 renderer:
 - may trigger cues from song time and from a media-scale threshold
 - pauses/disposes media and geometry when the envelope deactivates
 
-Discovered image/video assets under `apps/playground/src/assets/**` are available by file name/path through the media catalog embedded into the presentation runtime.
+Discovered image/video assets under `apps/playground/src/assets/**` are available by file name/path through the generic media catalog. The current shared test-video pool is reserved at `apps/playground/src/assets/oversphere/videos/`.
 
 ### Minimal example
 
