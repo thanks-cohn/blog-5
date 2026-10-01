@@ -5,5 +5,11 @@
     "avoidPreviousPlane": false,
     "pairingRequired": false
   },
-  "videos": []
+  "videos": [
+    {
+      "id": "one-day-with-everyone-01",
+      "name": "One Day With Everyone",
+      "url": "https://cdn.animeplex.lol/one_day_with_everyone_10084/16725611_2160_3840_25fps.mp4"
+    }
+  ]
 }
