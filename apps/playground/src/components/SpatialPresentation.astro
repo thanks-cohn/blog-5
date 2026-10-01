@@ -416,8 +416,8 @@ const runtimeConfig = {
         setAssetMotion(name: string, motion: ObjectMotion): void;
         getAssetFocusAudio(name: string): { track: string } | null;
         setAssetFocusAudio(name: string, patch: { track?: string }): void;
-        getUnpairedGlbLimit(stationId?: string): number;
-        setUnpairedGlbLimit(limit: number, stationId?: string): number;
+        getUnpairedGlbLimit(stationId?: string): number | "all";
+        setUnpairedGlbLimit(limit: number | "all", stationId?: string): number | "all";
         getFallbackSongHistoryWindow(): number;
         setFallbackSongHistoryWindow(count: number): number;
         getAvoidCurrentPlaneSongsForFallback(): boolean;
@@ -726,13 +726,18 @@ const runtimeConfig = {
       try {
         stored = JSON.parse(window.localStorage.getItem(unpairedGlbLimitStorageKey) ?? "{}");
       } catch {}
-      return {
-        global: Math.max(0, Math.floor(Number(stored.global ?? 2))),
-        ...stored
-      };
+      const normalized: Record<string, number | "all"> = {};
+      for (const [key, value] of Object.entries(stored ?? {})) {
+        normalized[key] =
+          value === "all"
+            ? "all"
+            : Math.max(0, Math.floor(Number(value) || 0));
+      }
+      if (!("global" in normalized)) normalized.global = 2;
+      return normalized;
     }
 
-    let unpairedGlbLimits: Record<string, number> = loadUnpairedGlbLimits();
+    let unpairedGlbLimits: Record<string, number | "all"> = loadUnpairedGlbLimits();
 
     function loadFallbackSongHistoryWindow() {
       try {
@@ -756,9 +761,16 @@ const runtimeConfig = {
     let avoidCurrentPlaneSongsForFallback = loadAvoidCurrentPlaneSongs();
 
     function resolvedUnpairedGlbLimit(stationId?: string) {
-      const specific = stationId ? Number(unpairedGlbLimits[stationId]) : NaN;
-      if (Number.isFinite(specific)) return Math.max(0, Math.floor(specific));
-      return Math.max(0, Math.floor(Number(unpairedGlbLimits.global ?? 4)));
+      const specific = stationId ? unpairedGlbLimits[stationId] : undefined;
+      if (specific === "all") return "all" as const;
+      const specificNumber = Number(specific);
+      if (Number.isFinite(specificNumber)) {
+        return Math.max(0, Math.floor(specificNumber));
+      }
+
+      const global = unpairedGlbLimits.global ?? 2;
+      if (global === "all") return "all" as const;
+      return Math.max(0, Math.floor(Number(global) || 0));
     }
 
     function saveUnpairedGlbLimits() {
@@ -2040,8 +2052,11 @@ const runtimeConfig = {
       getUnpairedGlbLimit(stationId?: string) {
         return resolvedUnpairedGlbLimit(stationId);
       },
-      setUnpairedGlbLimit(limit: number, stationId?: string) {
-        const normalized = Math.max(0, Math.floor(Number(limit) || 0));
+      setUnpairedGlbLimit(limit: number | "all", stationId?: string) {
+        const normalized =
+          limit === "all"
+            ? "all"
+            : Math.max(0, Math.floor(Number(limit) || 0));
         if (stationId) unpairedGlbLimits[stationId] = normalized;
         else unpairedGlbLimits.global = normalized;
         saveUnpairedGlbLimits();
@@ -3272,10 +3287,15 @@ const runtimeConfig = {
             [shuffledUnpaired[j], shuffledUnpaired[i]];
         }
 
+        const sampledUnpaired =
+          unpairedLimit === "all"
+            ? shuffledUnpaired
+            : shuffledUnpaired.slice(0, unpairedLimit);
+
         const allDiscovered = [
           ...stationInventory.filter((asset: any) => asset?.kind !== "3d"),
           ...paired3d,
-          ...shuffledUnpaired.slice(0, unpairedLimit)
+          ...sampledUnpaired
         ];
         const displayMainImageAsFloatingObject =
           station?.mainImage?.displayAsFloatingObject ??
@@ -3325,7 +3345,9 @@ const runtimeConfig = {
             assetMotionState[objectName] ?? config.assetMotion?.[objectName]
           );
           const obj: SceneObject = {
-            id: `${station.id}-asset-${i}`,
+            id: asset
+              ? `${station.id}-asset-${encodeURIComponent(objectName)}`
+              : `${station.id}-proxy-${i}`,
             name: objectName,
             kind,
             url: asset?.url,
