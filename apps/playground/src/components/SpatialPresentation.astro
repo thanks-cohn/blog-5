@@ -5046,6 +5046,15 @@ const runtimeConfig = {
 
         if (!journeyEntries.length) return;
 
+        // Always anchor manual navigation to the object that is actually in
+        // focus. Cross-plane arrival, audio-driven advancement, or a rebuilt
+        // layout must never leave the numeric cursor one step away from the
+        // visual object the visitor is currently seeing.
+        const focusedIndex = journeyEntries.findIndex(
+          (entry) => entry.assetName === focusExperience?.object.name
+        );
+        if (focusedIndex >= 0) journeyCursor = focusedIndex;
+
         if (direction > 0) {
           if (journeyCursor >= journeyEntries.length - 1) {
             journeyPlaneCyclesCompleted += 1;
@@ -5391,9 +5400,16 @@ const runtimeConfig = {
               candidate.name === pending.assetName
           );
           if (obj) {
-            requestFocusExperience(
-              obj,
-              pending.url ? { url: pending.url, track: pending.track } : undefined
+            const pendingIndex = journeyEntries.findIndex(
+              (entry) => entry.assetName === pending.assetName
+            );
+            if (pendingIndex >= 0) journeyCursor = pendingIndex;
+
+            // Reuse normal journey playback so dynamic fallback selection,
+            // history accounting, exclusions, and focused-object state all
+            // stay synchronized after a roller-coaster arrival.
+            playJourneyEntry(
+              pendingIndex >= 0 ? journeyEntries[pendingIndex] : pending
             );
           }
         }
