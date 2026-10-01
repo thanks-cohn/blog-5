@@ -4764,12 +4764,30 @@ const runtimeConfig = {
       }
 
       function planeJourneyEntries(stationIndex: number) {
-        const previousScope = presentationSettings.focusAudio.scope;
-        presentationSettings.focusAudio.scope = "all";
-        const entries = resolvedFocusPlaylist()
-          .filter((entry) => entry.stationIndex === stationIndex);
-        presentationSettings.focusAudio.scope = previousScope;
-        return entries;
+        const station = stations[stationIndex];
+        if (!station) return [];
+
+        return visiblePlaneGlbs(stationIndex).map((obj: SceneObject) => {
+          const assigned =
+            assetFocusAudioState[obj.name]?.track ??
+            configuredAssetFocusTrack(obj.name);
+          const paired = assigned
+            ? trackCatalog().find(
+                (track: { name: string; url: string }) =>
+                  track.name === assigned
+              )
+            : null;
+
+          return {
+            stationId: station.id,
+            stationIndex,
+            assetName: obj.name,
+            // Unpaired entries intentionally carry no preselected song.
+            // Their eligible fallback is resolved fresh when the step is played.
+            track: paired?.name ?? "",
+            url: paired?.url ?? ""
+          };
+        });
       }
 
       function rotateJourneyEntries(
@@ -4823,17 +4841,9 @@ const runtimeConfig = {
         );
         if (!obj) return;
 
-        const assigned =
-          assetFocusAudioState[obj.name]?.track ??
-          configuredAssetFocusTrack(obj.name);
-
-        // Paired objects keep their fixed song. Unpaired objects resolve a
-        // history-aware fallback from the unassigned-song pool.
-        const chosen = assigned
-          ? trackCatalog().find(
-              (track: { name: string; url: string }) => track.name === assigned
-            ) ?? null
-          : focusTrackForObject(obj);
+        // Resolve at playback time so paired tracks, object exclusions,
+        // recent-history rules, and unpaired fallback selection all share one path.
+        const chosen = focusTrackForObject(obj);
 
         if (chosen) {
           journeyPlaneSongCount += 1;
@@ -4878,6 +4888,7 @@ const runtimeConfig = {
         journeyEntries = nextEntries;
         journeyCursor = next ? 0 : -1;
         journeyStationIndex = nextStationIndex;
+        resetPlaneResidencyProgress();
 
         if (!next) {
           requestStation(
