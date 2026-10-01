@@ -757,7 +757,7 @@ const runtimeConfig = {
         }
         normalized[key] = Math.max(0, Math.floor(Number(value) || 0));
       }
-      if (!("global" in normalized)) normalized.global = 2;
+      if (!("global" in normalized)) normalized.global = { mode: "range", min: 3, max: 5 };
       return normalized;
     }
 
@@ -803,7 +803,9 @@ const runtimeConfig = {
     function resolvedUnpairedGlbLimit(stationId?: string): UnpairedGlbCountPolicy {
       const specific = stationId ? unpairedGlbLimits[stationId] : undefined;
       if (specific != null) return normalizeUnpairedGlbPolicy(specific);
-      return normalizeUnpairedGlbPolicy(unpairedGlbLimits.global ?? 2);
+      return normalizeUnpairedGlbPolicy(
+        unpairedGlbLimits.global ?? { mode: "range", min: 3, max: 5 }
+      );
     }
 
     function resolveUnpairedGlbCount(
