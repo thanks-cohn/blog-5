@@ -1,60 +1,647 @@
-# Codex starter handoff for WebRev
+# Codex Run: Canonical API Extraction, Contract Audit, and Agent Introspection Foundation
 
-You are working in the WebRev repository.
+You are working in the `thanks-cohn/blog-5` repository.
 
-Before making architectural changes, read:
+This run is primarily an **API discovery, extraction, reconciliation, and documentation pass**.
 
-1. `/AGENTS.md`
-2. `/docs/PRODUCT_SPEC.md`
-3. `/docs/ARCHITECTURE.md`
-4. `/docs/WEBSITES_CONFIG.md`
-5. `/docs/AEXIS_HANDOFF.md`
+The goal is to make the repository legible to future coding agents without requiring screenshots, guesswork, or oral history.
 
-## Goal
+## Core objective
 
-Continue building WebRev as an agent-first, reversible web application framework layer.
+Build a canonical understanding of **everything API-related that already exists in the repository**, then update `docs/api` so the documentation matches the implementation as closely and completely as possible.
 
-The first host is Astro. Do not fork Astro or replace Vite unless a concrete blocker proves it necessary.
+Do **not** assume the current API documentation is complete or authoritative.
 
-The first real consumer is the AEXIS website, but WebRev core must remain generic.
+Treat the source code as the primary evidence.
 
-## Immediate priorities
+The documentation should become the canonical human/agent-facing contract.
 
-1. Make the initial scaffold build and test cleanly.
-2. Keep revision identity structured and machine-readable.
-3. Keep `/.well-known/webrev.json` as the discovery direction for WebRev-enabled sites.
-4. Build inspection/invariant primitives as small generic interfaces.
-5. Keep WASM experiments isolated from the primary site.
-6. Keep deployment providers replaceable.
-7. Treat Cloudflare Pages as the first production target while preserving GitHub deployment support.
-8. Keep origins configurable through `config/websites.json`; do not hardcode deployable URLs elsewhere.
+---
 
-## Website resolution rule
+# Why this matters
 
-The minimal topology is intentionally simple:
+This project is becoming an agent-first spatial presentation/journey engine.
 
-- `live` = the normal website/application origin.
-- `cdn` = the broad asset/distribution origin.
+A future agent should be able to answer questions like:
 
-Asset-like responsibilities should fall back to `cdn`.
-If no CDN exists, they should fall back to `live`.
+- What plane is active?
+- What plane is next?
+- What objects exist on every plane?
+- Which objects are actually rendered?
+- Where are those objects in local, world, and screen space?
+- Which objects are hidden, loaded, loading, failed, preview-only, randomized, paired, or unpaired?
+- What is the camera doing?
+- Is the camera idle, focusing, riding the roller coaster, teleporting programmatically, or executing a custom transition?
+- What journey object is active?
+- What is the journey cursor?
+- What song is playing and why was it chosen?
+- What track-history rules are active?
+- What randomized-object-history rules are active?
+- What preview policy is affecting distant planes?
+- What WebGL/Three.js resources are resident?
+- Has WebGL context been lost or restored?
+- What state came from configuration, local storage, runtime mutation, random selection, or a fallback rule?
+- What public commands can inspect or mutate any of this?
 
-Specific responsibilities may override these broad categories later, but WebRev must not require users to model unnecessary granularity.
+The long-term target is a **Deep Debug / Agent Introspection API** that gives future agents structured runtime truth so screenshots are optional rather than required.
 
-## Engineering constraint
+This Codex run should first establish the complete API map needed to support that direction.
 
-If the framework already knows a fact that would help a programmer or coding agent debug the application, preserve it as structured data instead of forcing later inference.
+---
 
-## First deliverable
+# Required reading
 
-Produce a small, reviewable implementation that proves:
+Before changing documentation, inspect at minimum:
 
-- revision identity
-- machine-readable inspection
-- one health/invariant primitive
-- the website resolver fallback model
-- isolated WASM lab behavior
-- Cloudflare-compatible static build
-- GitHub CI
+- `AGENTS.md`
+- `apps/playground/src/components/SpatialPresentation.astro`
+- `config/presentations/uniqueness-rewarded.json`
+- `docs/api/README.md`
+- `docs/journey/README.md`
+- every file under `docs/proposals/` that describes playback, journey, manifests, spatial effects, or orchestration
+- relevant helpers under `apps/playground/src/lib/`
+- any code that declares or dispatches `webrev:*` events
+- any code that reads/writes `localStorage`
+- any public `window.*` API
+- any manifest/config schema used by the runtime
+- any TypeScript type/interface that appears in a public method, event detail, persisted shape, or runtime inspection result
 
-Do not expand into a giant framework before this loop works end-to-end.
+Search the repo broadly. Do not limit the audit to one file.
+
+---
+
+# First task: extract the complete API surface
+
+Create a source-derived inventory of all externally meaningful API surfaces.
+
+At minimum, identify and document:
+
+## 1. Public JavaScript/runtime APIs
+
+Especially:
+
+`window.webrevPresentationSettings`
+
+Inventory **every method currently exposed**, including:
+
+- exact method name
+- parameters
+- accepted values
+- return type
+- default behavior
+- mutation/read-only classification
+- side effects
+- persistence effects
+- events dispatched
+- rebuild/re-render effects
+- important fallback behavior
+- known constraints
+- example usage
+
+Do not omit methods just because they appear experimental or debug-oriented.
+
+---
+
+## 2. Public TypeScript types and interfaces
+
+Extract every type/interface that is part of a public or semi-public contract, including but not limited to concepts such as:
+
+- camera modes
+- object motion
+- asset placement
+- spatial envelopes
+- focus playback
+- playback programs
+- plane residency
+- plane travel
+- unpaired GLB count policy
+- distant-plane preview policy
+- randomized GLB diversity policy
+- track exclusions
+- journey music evolution
+- weighted/probabilistic transition resources
+- transition policies
+- focus playlist entries
+- editor state
+- runtime load status
+- style snapshot/manifest-adjacent shapes
+
+If a type lives in another source file, link/document the canonical source.
+
+Do not silently invent a cleaner type than the implementation currently uses.
+
+If implementation and docs disagree, say so and reconcile the docs to reality.
+
+---
+
+## 3. Events
+
+Search for every:
+
+`new CustomEvent("webrev:...")`
+
+and every listener for those events.
+
+Document:
+
+- event name
+- when it fires
+- `detail` shape
+- whether it is cancelable
+- whether callers are expected to call `preventDefault()`
+- fallback behavior if nobody handles it
+- whether it represents state observation or an extension hook
+
+Create one canonical Events section/table.
+
+---
+
+## 4. Persistence contracts
+
+Inventory every `localStorage` key.
+
+For each key document:
+
+- exact key
+- current version suffix
+- stored shape
+- default when absent
+- migration/invalidation behavior
+- whether stale browser state can override code defaults
+- which public API modifies it
+
+This is important because stale storage has already caused confusing runtime behavior.
+
+---
+
+## 5. Configuration contracts
+
+Document configuration inputs from:
+
+- presentation JSON
+- asset discovery
+- station definitions
+- arrangement
+- rail
+- asset motion
+- asset actions
+- center images
+- asset naming/import hints
+- music discovery
+- focus-audio pairing
+- spatial settings
+- preview behavior
+
+Clearly distinguish:
+
+- authored config
+- runtime-generated state
+- browser-persisted state
+- derived state
+
+---
+
+## 6. Runtime-derived contracts
+
+Document important state that is not authored directly but determines behavior, including:
+
+- generated plane layouts
+- randomized GLB selections
+- paired vs unpaired object classification
+- played/unheard/recent track history
+- current-plane track history
+- journey entries
+- journey cursor
+- plane cycle count
+- plane song count
+- completed journey count
+- active travel strategy
+- pending cross-plane focus
+- GLB load state
+- Three.js object residency
+- camera target/current state
+
+This section should help prepare the Deep Debug API.
+
+---
+
+## 7. Rendering and coordinate conventions
+
+Extract and document the coordinate conventions used by the engine.
+
+At minimum explain:
+
+- station center
+- station Z
+- object local coordinates
+- object world coordinates
+- camera coordinates
+- projected screen coordinates
+- depth
+- object radius / spatial envelope
+- hemisphere
+- object anchor
+- fixed vs free motion
+- camera-midpoint anchoring
+- Three.js model transform
+- image plane transform
+- text plane transform
+
+A future agent must be able to distinguish:
+
+`local → world → camera → projected screen`
+
+without reading the renderer from scratch.
+
+---
+
+## 8. Journey state machine
+
+Document the currently implemented state machine, including:
+
+- idle on plane
+- object focus
+- object traversal
+- plane completion
+- travel request
+- roller-coaster movement
+- teleport/programmatic travel
+- custom travel
+- pending destination object
+- arrival
+- intermission/arrival behavior if currently implemented or partially implemented
+- continuation into the next object
+
+Clearly separate:
+
+- current implementation
+- intended design
+- proposals not yet implemented
+
+Do not describe a proposal as already supported.
+
+---
+
+## 9. Music resolution rules
+
+Extract the actual current ordering of decisions.
+
+Document:
+
+- fixed paired tracks
+- object Track Exclusions
+- globally unassigned pool
+- unheard-first behavior
+- recent-history avoidance
+- current-plane avoidance
+- graceful relaxation order
+- transition pools
+- exact probabilities
+- relative weights
+- wildcard transition policy
+- journey-prefix / evolution concepts that are implemented vs planned
+
+The order of precedence matters and must be explicit.
+
+---
+
+## 10. Randomized GLB selection rules
+
+Extract the actual current logic.
+
+Document:
+
+- 3–5 default policy
+- fixed/range/all modes
+- global unpaired pool
+- per-run uniqueness preference
+- adjacent-plane avoidance
+- reuse behavior when inventory is insufficient
+- recency multipliers / probability decay
+- random-selection history
+- deterministic vs nondeterministic behavior
+- whether rebuilds can change selections
+
+If current behavior does not match intended docs, call out the mismatch.
+
+---
+
+# Deep Debug / Agent Introspection requirements
+
+After the inventory is complete, identify what data a future agent still cannot observe cleanly from the current public API.
+
+Create a dedicated section in `docs/api` called something like:
+
+`Deep Debug / Agent Introspection API`
+
+It should define the desired contract for structured live-state inspection.
+
+The target should eventually expose a read-only snapshot with enough information to understand what the user is seeing without screenshots.
+
+A proposed snapshot should cover at least:
+
+## Runtime identity
+
+- schema version
+- build/revision identifier if available
+- timestamp
+- current URL/route
+- viewport size
+- device pixel ratio
+
+## Plane state
+
+For every plane:
+
+- id
+- label
+- index
+- station/world center
+- station Z
+- active/current/next/previous flags
+- preview policy
+- main image state
+- text plane state
+- randomized GLBs chosen
+- paired GLBs
+- total visible journey objects
+
+## Object state
+
+For every rendered or renderable object:
+
+- id
+- name
+- asset type
+- station id/index
+- paired/unpaired/randomized/authored classification
+- local position
+- world position
+- projected screen position
+- screen radius/bounds
+- depth
+- size
+- spin
+- hemisphere
+- visible flag
+- actually rendered this frame
+- preview-only flag
+- motion configuration
+- anchor configuration
+- spatial envelope
+- collision response
+- model bounds/radius
+- runtime GLB load status
+- load attempts/error
+- Three.js residency
+- current focus status
+- current audio pairing
+- Track Exclusions
+
+## Camera state
+
+- world position
+- target plane
+- current Z
+- target Z
+- yaw/pitch
+- camera mode
+- placement
+- focus camera interpolation state
+- editor camera state
+- whether arrived
+
+## Travel state
+
+Expose a clear enum/state such as:
+
+- `idle`
+- `roller-coaster`
+- `teleport`
+- `custom`
+- `focus-transition`
+
+Include:
+
+- source plane
+- destination plane
+- travel mode
+- custom travel id
+- progress if derivable
+- pending focus object
+- whether travel was user-driven or programmatic if available
+
+## Journey state
+
+- journey active
+- station index
+- cursor
+- length
+- active object
+- cycle count
+- song count
+- residency policy
+- residency completion status
+- completed full journey count
+- click-to-start policy
+- pending destination entry
+
+## Audio state
+
+- playing/paused
+- current track
+- current asset
+- source URL if appropriate
+- volume
+- loop mode
+- fade state if derivable
+- recent track history
+- played history
+- unheard history
+- current-plane used tracks
+- fallback resolver constraints
+
+## Randomization state
+
+- unpaired GLB count policy
+- selected random GLBs per plane
+- diversity policy
+- recent-plane multipliers
+- candidate counts if available
+- song selection history
+- transition-resource selection policy
+
+## Renderer health
+
+- WebGL context status
+- renderer initialized
+- Three.js object count
+- loaded GLB count
+- loading GLB count
+- failed GLB count
+- image-plane count
+- text-plane count
+- debug globe count
+- stale-resource count if measurable
+- last context-loss/restoration timestamps if available
+
+## Persistence/config provenance
+
+Where practical, label important values as originating from:
+
+- config
+- default
+- localStorage
+- runtime API mutation
+- generated/randomized state
+
+This is highly valuable for debugging “why is the live site doing this?”
+
+---
+
+# Recommended Deep Debug API shape
+
+Prefer one stable read-only root such as:
+
+```ts
+window.webrevDebug
+```
+
+or:
+
+```ts
+window.webrevPresentationSettings.getDebugSnapshot()
+```
+
+Do not create multiple disconnected global debug APIs unless there is a strong architectural reason.
+
+Recommended primitives:
+
+```ts
+getDebugSnapshot()
+getPlaneDebugState(stationId?)
+getObjectDebugState(nameOrId)
+getJourneyDebugState()
+getRendererDebugState()
+getAudioDebugState()
+getRandomizationDebugState()
+subscribeDebug(listener)
+```
+
+The exact final design should follow the existing architecture.
+
+For this Codex run, documenting the complete target contract is required.
+
+Implementation of the entire Deep Debug API is optional **only if** doing so would make the audit too large for one safe change.
+
+If a small read-only foundation can be implemented cleanly, prefer implementing it.
+
+Do not add mutation commands to the Deep Debug API unless clearly justified.
+
+---
+
+# Documentation structure
+
+Refactor `docs/api/README.md` if necessary.
+
+It should become easy for both a person and an agent to navigate.
+
+A strong structure would include:
+
+1. Purpose and compatibility
+2. Quick start
+3. API root/global objects
+4. Complete method reference
+5. Public types/interfaces
+6. Events
+7. Persistence/storage keys
+8. Configuration contracts
+9. Runtime-derived state
+10. Coordinate/rendering conventions
+11. Journey state machine
+12. Music rules
+13. Randomized GLB rules
+14. Plane preview rules
+15. Transition-resource rules
+16. Renderer/WebGL lifecycle
+17. Deep Debug / Agent Introspection
+18. Defaults
+19. Fallback/degradation rules
+20. Stable vs experimental vs proposed features
+21. Source-of-truth file map
+22. Known mismatches / technical debt
+
+Do not optimize for brevity.
+
+This document is intended to become the **inclusive canonical API reference**.
+
+---
+
+# Accuracy rules
+
+- Source code beats old docs.
+- Do not invent implemented commands.
+- Do not describe proposals as implemented.
+- Mark uncertain behavior explicitly.
+- Prefer exact names and exact type shapes.
+- Include defaults.
+- Include fallback order.
+- Include persistence/version details.
+- Include event names exactly.
+- Include examples where helpful.
+- Identify stale/deprecated/legacy pathways.
+- Identify duplicate logic that could create divergent behavior.
+- Note where runtime behavior depends on browser-local state.
+- Note where live rendering state is currently impossible to inspect externally.
+
+---
+
+# Agent-first design rule
+
+If the framework already knows a fact that would help a programmer or future agent debug the experience, prefer exposing or documenting that fact as structured data instead of forcing inference from screenshots, DOM appearance, or user descriptions.
+
+The engine should increasingly be able to explain itself.
+
+---
+
+# Deliverables
+
+At minimum complete all of the following:
+
+1. Audit the repository for every public/semi-public API surface.
+2. Update `docs/api/README.md` into an exhaustive source-derived reference.
+3. Add a complete event inventory.
+4. Add a complete localStorage/persistence inventory.
+5. Add configuration/runtime provenance documentation.
+6. Add coordinate/rendering conventions.
+7. Add journey/travel state documentation.
+8. Add music-resolution precedence.
+9. Add randomized-GLB precedence.
+10. Add a comprehensive Deep Debug / Agent Introspection contract.
+11. List any implementation/documentation mismatches discovered.
+12. If safe and small, implement the first read-only Deep Debug snapshot primitive.
+13. Run the relevant checks/tests/build.
+14. Report:
+    - files changed
+    - API surfaces discovered
+    - new documentation sections
+    - mismatches found
+    - whether Deep Debug code was implemented
+    - test/build results
+    - recommended next implementation step
+
+---
+
+# Non-goals for this run
+
+Do not:
+
+- redesign the whole renderer
+- rewrite the journey engine
+- replace stable existing API names without compatibility need
+- hide complexity by deleting advanced features
+- collapse authored state and runtime state into one ambiguous object
+- add screenshot/OCR dependencies as the primary debugging mechanism
+
+The purpose of this run is to **make the existing system legible and contract-driven**, and establish the foundation for structured live introspection.
+
