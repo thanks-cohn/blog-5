@@ -528,6 +528,31 @@ const runtimeConfig = {
 
   function ensureThree() {
     if (threeRenderer || !(glbCanvas instanceof HTMLCanvasElement)) return;
+
+    if (!glbCanvas.dataset.webglRecoveryBound) {
+      glbCanvas.dataset.webglRecoveryBound = "true";
+      glbCanvas.addEventListener("webglcontextlost", (event) => {
+        event.preventDefault();
+        status && (status.textContent = "3D renderer paused · recovering graphics");
+        window.dispatchEvent(new CustomEvent("webrev:webgl-context-lost"));
+      });
+      glbCanvas.addEventListener("webglcontextrestored", () => {
+        threeRenderer = null;
+        threeScene = null;
+        threeCamera = null;
+        gltfLoader = null;
+        threeObjects.clear();
+        threeLoading.clear();
+        threeLoadAttempts.clear();
+        threeRetryAt.clear();
+        debugGlobes.clear();
+        envelopeDebugGlobes.clear();
+        ensureThree();
+        status && (status.textContent = "3D renderer restored");
+        window.dispatchEvent(new CustomEvent("webrev:webgl-context-restored"));
+      });
+    }
+
     const T3: any = THREE;
     threeScene = new T3.Scene();
     threeCamera = new T3.PerspectiveCamera(50, 1, 0.05, 250);
@@ -543,6 +568,45 @@ const runtimeConfig = {
     key.position.set(5, 8, 6);
     threeScene.add(key);
     gltfLoader = new (GLTFLoader as any)();
+  }
+
+  function disposeMaterial(material: any) {
+    if (!material) return;
+    const materials = Array.isArray(material) ? material : [material];
+    for (const entry of materials) {
+      if (!entry) continue;
+      for (const key of Object.keys(entry)) {
+        const value = entry[key];
+        if (value && typeof value === "object" && typeof value.dispose === "function" && value.isTexture) {
+          value.dispose();
+        }
+      }
+      entry.dispose?.();
+    }
+  }
+
+  function disposeThreeObjectById(id: string) {
+    const group = threeObjects.get(id);
+    if (!group) return;
+    group.traverse?.((node: any) => {
+      node.geometry?.dispose?.();
+      disposeMaterial(node.material);
+    });
+    group.parent?.remove?.(group);
+    threeObjects.delete(id);
+    threeLoading.delete(id);
+    threeLoadAttempts.delete(id);
+    threeRetryAt.delete(id);
+    debugGlobes.get(id)?.parent?.remove?.(debugGlobes.get(id));
+    debugGlobes.delete(id);
+    envelopeDebugGlobes.get(id)?.parent?.remove?.(envelopeDebugGlobes.get(id));
+    envelopeDebugGlobes.delete(id);
+  }
+
+  function pruneThreeObjects(validIds: Set<string>) {
+    for (const id of Array.from(threeObjects.keys())) {
+      if (!validIds.has(id)) disposeThreeObjectById(id);
+    }
   }
 
   function publishGlbRuntimeStatus(obj: SceneObject, status: GlbRuntimeStatus, error?: unknown) {
@@ -2649,15 +2713,20 @@ const runtimeConfig = {
         return positions;
       };
       ensureThree();
-      for (const layout of layouts) {
-        for (const obj of layout) ensureThreeObject(obj);
-      }
 
       function rebuildAssetLayouts() {
         layouts = stations.map((station: any, index: number) => generateLayout(station, index));
+
+        // Rebuilds may change the randomized GLB sample. Dispose GPU resources
+        // for models no longer referenced by any current layout instead of
+        // allowing old geometry/materials/textures to accumulate indefinitely.
+        const validIds = new Set<string>();
         for (const layout of layouts) {
-          for (const obj of layout) ensureThreeObject(obj);
+          for (const obj of layout) {
+            if (obj.kind === "3d" && obj.url) validIds.add(obj.id);
+          }
         }
+        pruneThreeObjects(validIds);
       }
 
       function makeAssetRow(obj: SceneObject) {
@@ -4268,7 +4337,10 @@ const runtimeConfig = {
             ctx.strokeRect(-size, -size * .72, size * 2, size * 1.44);
           }
         } else if (obj.url) {
-          ensureThreeObject(obj);
+          // Lazy-load only models close enough to matter visually. This keeps
+          // randomized assets on distant planes from consuming GPU memory before
+          // the visitor approaches them.
+          if (p.depth <= 30) ensureThreeObject(obj);
           const model = threeObjects.get(obj.id);
           if (model) {
             model.visible = true;
@@ -4458,6 +4530,12 @@ const runtimeConfig = {
           0,
           0
         );
+      }
+
+      function hideAllThreeObjects() {
+        for (const model of threeObjects.values()) model.visible = false;
+        for (const globe of debugGlobes.values()) globe.visible = false;
+        for (const globe of envelopeDebugGlobes.values()) globe.visible = false;
       }
 
       function drawStation(index: number, now: number) {
