@@ -264,10 +264,18 @@ const runtimeConfig = {
   type FocusPlaybackMode = "zone-cycle" | "loop-item";
   type FocusPlaybackScope = "station" | "all";
   type FocusPlaybackOrder = "ordered" | "random";
+  type PlaneTravelMode = "teleport" | "roller-coaster" | "custom";
+  type PlaneResidencyPolicy =
+    | { mode: "cycles"; value: number }
+    | { mode: "songs"; value: number }
+    | { mode: "coverage"; value: number };
   type FocusPlaybackProgram = {
     scope?: FocusPlaybackScope;
     order?: FocusPlaybackOrder;
     sequence?: string[];
+    residency?: PlaneResidencyPolicy;
+    travelMode?: PlaneTravelMode;
+    customTravelId?: string;
     pools?: Array<{
       id: string;
       assets?: string[];
@@ -420,6 +428,11 @@ const runtimeConfig = {
         getFocusPlaybackProgram(): FocusPlaybackProgram;
         setFocusPlaybackProgram(program: FocusPlaybackProgram): FocusPlaybackProgram;
         setFocusPlaybackOrder(order: FocusPlaybackOrder): FocusPlaybackProgram;
+        getPlaneResidencyPolicy(): PlaneResidencyPolicy;
+        setPlaneResidencyPolicy(policy: PlaneResidencyPolicy): PlaneResidencyPolicy;
+        getPlaneTravelMode(): PlaneTravelMode;
+        setPlaneTravelMode(mode: PlaneTravelMode, customTravelId?: string): PlaneTravelMode;
+        travelToPlane(stationId: string, mode?: PlaneTravelMode, customTravelId?: string): boolean;
         getStyleExplorationMode(): boolean;
         setStyleExplorationMode(enabled: boolean): boolean;
         getJourneyClickStart(): boolean;
@@ -486,6 +499,9 @@ const runtimeConfig = {
     scope: "all",
     order: "ordered",
     sequence: [],
+    residency: { mode: "cycles", value: 1 },
+    travelMode: "roller-coaster",
+    customTravelId: "",
     pools: []
   };
 
@@ -2087,6 +2103,28 @@ const runtimeConfig = {
           sequence: Array.isArray(program?.sequence)
             ? program.sequence.filter((value) => typeof value === "string")
             : [],
+          residency: (() => {
+            const mode =
+              program?.residency?.mode === "songs" || program?.residency?.mode === "coverage"
+                ? program.residency.mode
+                : "cycles";
+            const raw = Number(program?.residency?.value);
+            return {
+              mode,
+              value:
+                mode === "coverage"
+                  ? Math.max(1, Math.min(100, Number.isFinite(raw) ? raw : 100))
+                  : Math.max(1, Math.floor(Number.isFinite(raw) ? raw : 1))
+            } as PlaneResidencyPolicy;
+          })(),
+          travelMode:
+            program?.travelMode === "teleport" || program?.travelMode === "custom"
+              ? program.travelMode
+              : "roller-coaster",
+          customTravelId:
+            typeof program?.customTravelId === "string"
+              ? program.customTravelId
+              : "",
           pools: Array.isArray(program?.pools)
             ? program.pools.map((pool) => ({
                 id: String(pool?.id ?? ""),
@@ -2124,6 +2162,59 @@ const runtimeConfig = {
           detail: JSON.parse(JSON.stringify(focusPlaybackProgram))
         }));
         return JSON.parse(JSON.stringify(focusPlaybackProgram));
+      },
+      getPlaneResidencyPolicy() {
+        return JSON.parse(JSON.stringify(
+          focusPlaybackProgram.residency ?? { mode: "cycles", value: 1 }
+        ));
+      },
+      setPlaneResidencyPolicy(policy: PlaneResidencyPolicy) {
+        const mode =
+          policy?.mode === "songs" || policy?.mode === "coverage"
+            ? policy.mode
+            : "cycles";
+        const raw = Number(policy?.value);
+        const normalized = {
+          mode,
+          value:
+            mode === "coverage"
+              ? Math.max(1, Math.min(100, Number.isFinite(raw) ? raw : 100))
+              : Math.max(1, Math.floor(Number.isFinite(raw) ? raw : 1))
+        } as PlaneResidencyPolicy;
+        focusPlaybackProgram = { ...focusPlaybackProgram, residency: normalized };
+        window.dispatchEvent(new CustomEvent("webrev:plane-residency-policy", {
+          detail: JSON.parse(JSON.stringify(normalized))
+        }));
+        return JSON.parse(JSON.stringify(normalized));
+      },
+      getPlaneTravelMode() {
+        return focusPlaybackProgram.travelMode === "teleport" ||
+          focusPlaybackProgram.travelMode === "custom"
+          ? focusPlaybackProgram.travelMode
+          : "roller-coaster";
+      },
+      setPlaneTravelMode(mode: PlaneTravelMode, customTravelId = "") {
+        const normalized: PlaneTravelMode =
+          mode === "teleport" || mode === "custom" ? mode : "roller-coaster";
+        focusPlaybackProgram = {
+          ...focusPlaybackProgram,
+          travelMode: normalized,
+          customTravelId:
+            normalized === "custom" ? String(customTravelId || "") : ""
+        };
+        window.dispatchEvent(new CustomEvent("webrev:plane-travel-mode", {
+          detail: {
+            mode: normalized,
+            customTravelId: focusPlaybackProgram.customTravelId ?? ""
+          }
+        }));
+        return normalized;
+      },
+      travelToPlane(stationId: string, mode: PlaneTravelMode = "teleport", customTravelId = "") {
+        const index = stations.findIndex((station: any) => station.id === stationId);
+        if (index < 0) return false;
+        requestStation(index, false, mode, customTravelId);
+        return true;
       },
       getStyleExplorationMode() {
         return styleExplorationEnabled;
@@ -2358,6 +2449,9 @@ const runtimeConfig = {
       let journeyEntries: FocusPlaylistEntry[] = [];
       let journeyCursor = -1;
       let journeyStationIndex = -1;
+      let journeyPlaneSongCount = 0;
+      let journeyPlaneCyclesCompleted = 0;
+      const journeyPlanePlayedTracks = new Set<string>();
 
       let layouts = stations.map((station: any, index: number) => generateLayout(station, index));
       captureStylePositions = () => {
@@ -2862,7 +2956,6 @@ const runtimeConfig = {
         renderSphereSettings();
       });
       window.addEventListener("webrev:asset-station", () => {
-        fallbackTrackByPlaneAndAsset.clear();
         rebuildAssetLayouts();
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
@@ -2874,19 +2967,16 @@ const runtimeConfig = {
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
       window.addEventListener("webrev:avoid-current-plane-songs", () => {
-        fallbackTrackByPlaneAndAsset.clear();
       });
       window.addEventListener("webrev:fallback-song-history-window", () => {
         // Policy is evaluated at selection time, so no scene rebuild is needed.
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
       window.addEventListener("webrev:unpaired-glb-limit", () => {
-        fallbackTrackByPlaneAndAsset.clear();
         rebuildAssetLayouts();
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
       window.addEventListener("webrev:asset-focus-audio", () => {
-        fallbackTrackByPlaneAndAsset.clear();
         // Pairing/unpairing a GLB changes whether it participates in the live scene.
         // Rebuild immediately so Settings acts like an activation control.
         rebuildAssetLayouts();
@@ -4213,23 +4303,57 @@ const runtimeConfig = {
         );
       }
 
-      function requestStation(index: number, preservePendingFocus = false) {
+      function requestStation(
+        index: number,
+        preservePendingFocus = false,
+        travelMode: PlaneTravelMode = "teleport",
+        customTravelId = ""
+      ) {
         if (!preservePendingFocus) {
           pendingFocusPlaylistEntry = null;
           journeyEntries = [];
           journeyCursor = -1;
           journeyStationIndex = -1;
+          resetPlaneResidencyProgress();
         }
+
         endFocusExperience();
-        arrivingAt = Math.max(0, Math.min(stations.length - 1, index));
+        const nextIndex = Math.max(0, Math.min(stations.length - 1, index));
+        arrivingAt = nextIndex;
         activeStationId = stations[arrivingAt]?.id ?? activeStationId;
         presentationSettings =
           stationSettings[activeStationId] ??
           defaultsForStation(stations[arrivingAt]);
         stationSettings[activeStationId] = presentationSettings;
+
         targetZ = stationZ(arrivingAt) + presentationSettings.camera.distanceFromCenter;
+
+        if (travelMode === "teleport") {
+          cameraZ = targetZ;
+        } else if (travelMode === "custom") {
+          const event = new CustomEvent("webrev:custom-plane-travel", {
+            cancelable: true,
+            detail: {
+              customTravelId: String(customTravelId || ""),
+              stationId: activeStationId,
+              stationIndex: arrivingAt,
+              targetZ,
+              fallback: "roller-coaster"
+            }
+          });
+          const handled = !window.dispatchEvent(event);
+          if (!handled) {
+            // Unhandled custom strategies degrade safely to the built-in ride.
+            status && (status.textContent = `Riding to ${stations[arrivingAt].label}`);
+          }
+        } else {
+          status && (status.textContent = `Riding to ${stations[arrivingAt].label}`);
+        }
+
         paperTextOverride = null;
-        status && (status.textContent = `Traveling to ${stations[arrivingAt].label}`);
+        if (travelMode === "teleport") {
+          status && (status.textContent = `Moved to ${stations[arrivingAt].label}`);
+        }
         renderSphereSettings();
       }
 
@@ -4237,7 +4361,7 @@ const runtimeConfig = {
         if (!action) return;
         if (action.type === "station") {
           const index = stations.findIndex((station: any) => station.id === action.stationId);
-          if (index >= 0) requestStation(index);
+          if (index >= 0) requestStation(index, false, "teleport");
           return;
         }
         if (action.type === "link") {
@@ -4459,8 +4583,6 @@ const runtimeConfig = {
           .filter((obj: SceneObject) => obj.kind === "3d" && obj.visible !== false);
       }
 
-      const fallbackTrackByPlaneAndAsset = new Map<string, string>();
-
       function pairedTrackNamesOnPlane(stationIndex = arrivingAt) {
         const names = new Set<string>();
         for (const obj of visiblePlaneGlbs(stationIndex)) {
@@ -4468,15 +4590,6 @@ const runtimeConfig = {
             assetFocusAudioState[obj.name]?.track ??
             configuredAssetFocusTrack(obj.name);
           if (assigned) names.add(assigned);
-        }
-        return names;
-      }
-
-      function fallbackTracksAlreadyUsedOnPlane(stationIndex = arrivingAt) {
-        const stationId = stations[stationIndex]?.id ?? "";
-        const names = new Set<string>();
-        for (const [key, track] of fallbackTrackByPlaneAndAsset) {
-          if (key.startsWith(`${stationId}::`)) names.add(track);
         }
         return names;
       }
@@ -4491,75 +4604,41 @@ const runtimeConfig = {
           assetFocusAudioState[obj.name]?.track ??
           configuredAssetFocusTrack(obj.name);
 
-        // Fixed pairings stay authoritative.
         if (assigned) {
           return catalog.find(
             (track: { name: string; url: string }) => track.name === assigned
           ) ?? null;
         }
 
-        // Unpaired GLBs only draw from globally unassigned songs.
+        // Unpaired GLBs resolve a fresh fallback every encounter.
         const fallbackPool = unassignedTracks();
         if (!fallbackPool.length) return null;
-
-        const stationId = stations[arrivingAt]?.id ?? "";
-        const cacheKey = `${stationId}::${obj.name}`;
-        const cachedName = fallbackTrackByPlaneAndAsset.get(cacheKey);
-        if (cachedName) {
-          const cached = fallbackPool.find(
-            (track: { name: string; url: string }) => track.name === cachedName
-          );
-          if (cached) return cached;
-          fallbackTrackByPlaneAndAsset.delete(cacheKey);
-        }
 
         const recent = recentPlayedTrackNames();
         const planeSongs = avoidCurrentPlaneSongsForFallback
           ? new Set<string>([
               ...pairedTrackNamesOnPlane(arrivingAt),
-              ...fallbackTracksAlreadyUsedOnPlane(arrivingAt)
+              ...journeyPlanePlayedTracks
             ])
           : new Set<string>();
 
-        // Preferred pool: not recently heard and not already represented on this plane.
         let candidates = fallbackPool.filter(
           (track: { name: string; url: string }) =>
             !recent.has(track.name) &&
             !planeSongs.has(track.name)
         );
 
-        // Relax plane uniqueness first, while still respecting recent-history avoidance.
+        // Relax plane uniqueness before relaxing recent-history avoidance.
         if (!candidates.length) {
           candidates = fallbackPool.filter(
             (track: { name: string; url: string }) => !recent.has(track.name)
           );
         }
 
-        // Final graceful fallback stays inside the globally unassigned pool.
+        // Final fallback remains inside the globally unassigned pool.
         if (!candidates.length) candidates = fallbackPool;
 
-        const unpairedObjects = visiblePlaneGlbs(arrivingAt).filter(
-          (candidate: SceneObject) => {
-            const candidateAssigned =
-              assetFocusAudioState[candidate.name]?.track ??
-              configuredAssetFocusTrack(candidate.name);
-            return !candidateAssigned;
-          }
-        );
-        const objectIndex = Math.max(
-          0,
-          unpairedObjects.findIndex(
-            (candidate: SceneObject) => candidate.name === obj.name
-          )
-        );
-
-        const chosen =
-          candidates[objectIndex % candidates.length] ??
-          candidates[0] ??
-          null;
-
-        if (chosen) fallbackTrackByPlaneAndAsset.set(cacheKey, chosen.name);
-        return chosen;
+        return candidates[Math.floor(Math.random() * candidates.length)] ?? null;
       }
 
       function planeJourneyEntries(stationIndex: number) {
@@ -4589,6 +4668,30 @@ const runtimeConfig = {
         return [...entries.slice(startIndex), ...entries.slice(0, startIndex)];
       }
 
+      function resetPlaneResidencyProgress() {
+        journeyPlaneSongCount = 0;
+        journeyPlaneCyclesCompleted = 0;
+        journeyPlanePlayedTracks.clear();
+      }
+
+      function shouldRemainOnCurrentPlane() {
+        const policy =
+          focusPlaybackProgram.residency ??
+          ({ mode: "cycles", value: 1 } as PlaneResidencyPolicy);
+
+        if (policy.mode === "songs") {
+          return journeyPlaneSongCount < Math.max(1, Math.floor(policy.value));
+        }
+
+        if (policy.mode === "coverage") {
+          const available = Math.max(1, trackCatalog().length);
+          const percent = (journeyPlanePlayedTracks.size / available) * 100;
+          return percent < Math.max(1, Math.min(100, policy.value));
+        }
+
+        return journeyPlaneCyclesCompleted < Math.max(1, Math.floor(policy.value));
+      }
+
       function playJourneyEntry(entry: FocusPlaylistEntry) {
         const obj = (layouts[entry.stationIndex] ?? []).find(
           (candidate: SceneObject) =>
@@ -4610,6 +4713,11 @@ const runtimeConfig = {
             ) ?? null
           : focusTrackForObject(obj);
 
+        if (chosen) {
+          journeyPlaneSongCount += 1;
+          journeyPlanePlayedTracks.add(chosen.name);
+        }
+
         requestFocusExperience(
           obj,
           chosen ? { url: chosen.url, track: chosen.name } : undefined
@@ -4626,6 +4734,7 @@ const runtimeConfig = {
         );
         journeyCursor = 0;
         journeyStationIndex = arrivingAt;
+        resetPlaneResidencyProgress();
 
         const first = journeyEntries[0];
         if (first) {
@@ -4649,12 +4758,28 @@ const runtimeConfig = {
         journeyStationIndex = nextStationIndex;
 
         if (!next) {
-          requestStation(nextStationIndex);
+          requestStation(
+            nextStationIndex,
+            false,
+            focusPlaybackProgram.travelMode === "teleport" ||
+              focusPlaybackProgram.travelMode === "custom"
+              ? focusPlaybackProgram.travelMode
+              : "roller-coaster",
+            focusPlaybackProgram.customTravelId ?? ""
+          );
           return;
         }
 
         pendingFocusPlaylistEntry = next;
-        requestStation(nextStationIndex, true);
+        requestStation(
+          nextStationIndex,
+          true,
+          focusPlaybackProgram.travelMode === "teleport" ||
+            focusPlaybackProgram.travelMode === "custom"
+            ? focusPlaybackProgram.travelMode
+            : "roller-coaster",
+          focusPlaybackProgram.customTravelId ?? ""
+        );
       }
 
       function stepFocusObject(direction: -1 | 1) {
@@ -4681,6 +4806,13 @@ const runtimeConfig = {
 
         if (direction > 0) {
           if (journeyCursor >= journeyEntries.length - 1) {
+            journeyPlaneCyclesCompleted += 1;
+            if (shouldRemainOnCurrentPlane()) {
+              journeyCursor = 0;
+              const first = journeyEntries[0];
+              if (first) playJourneyEntry(first);
+              return;
+            }
             continueJourneyToNextPlane();
             return;
           }
@@ -5194,7 +5326,15 @@ const runtimeConfig = {
           // visible prism/string route first, then enter the destination object
           // only after the camera has physically arrived at that plane.
           pendingFocusPlaylistEntry = entry;
-          requestStation(entry.stationIndex, true);
+          requestStation(
+            entry.stationIndex,
+            true,
+            focusPlaybackProgram.travelMode === "teleport" ||
+              focusPlaybackProgram.travelMode === "custom"
+              ? focusPlaybackProgram.travelMode
+              : "roller-coaster",
+            focusPlaybackProgram.customTravelId ?? ""
+          );
           presentationSettings.focusAudio.scope =
             focusPlaybackProgram.scope === "station" ? "station" : "all";
           presentationSettings.focusAudio.playbackMode = "zone-cycle";
@@ -5597,7 +5737,7 @@ const runtimeConfig = {
         if (arrivingAt >= stations.length - 1) railRideDirection = -1;
         else if (arrivingAt <= 0) railRideDirection = 1;
 
-        requestStation(arrivingAt + railRideDirection);
+        requestStation(arrivingAt + railRideDirection, false, "roller-coaster");
       });
 
       window.addEventListener("keydown", (event) => {
@@ -5616,7 +5756,7 @@ const runtimeConfig = {
             stepFocusObject(1);
           } else {
             railRideDirection = 1;
-            requestStation(Math.min(stations.length - 1, arrivingAt + 1));
+            requestStation(Math.min(stations.length - 1, arrivingAt + 1), false, "teleport");
           }
         }
         if (event.key === "ArrowLeft") {
@@ -5625,10 +5765,10 @@ const runtimeConfig = {
             stepFocusObject(-1);
           } else {
             railRideDirection = -1;
-            requestStation(Math.max(0, arrivingAt - 1));
+            requestStation(Math.max(0, arrivingAt - 1), false, "teleport");
           }
         }
-        if (event.key === "Home") requestStation(0);
+        if (event.key === "Home") requestStation(0, false, "teleport");
       });
 
       // v2 demo default: ordered songs across every plane, wrapping forever.
@@ -5639,7 +5779,7 @@ const runtimeConfig = {
         scope: "all",
         order: "ordered"
       };
-      requestStation(0);
+      requestStation(0, false, "teleport");
       requestAnimationFrame(render);
     }
   }
