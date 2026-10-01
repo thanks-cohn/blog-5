@@ -5013,20 +5013,78 @@ const runtimeConfig = {
         const src = mediaEnvelopeSourceUrl(source.src);
         if (source.type === "video") {
           const video = document.createElement("video");
+          const state = {
+            phase: "created",
+            lastEventAt: performance.now(),
+            playError: undefined as string | undefined,
+            mediaErrorCode: undefined as number | undefined
+          };
+          const report = (phase: string) => {
+            state.phase = phase;
+            state.lastEventAt = performance.now();
+            state.mediaErrorCode = video.error?.code;
+            window.dispatchEvent(new CustomEvent("webrev:media-envelope-video-state", {
+              detail: {
+                mediaId: source.id,
+                src,
+                phase,
+                readyState: video.readyState,
+                networkState: video.networkState,
+                paused: video.paused,
+                ended: video.ended,
+                currentTime: video.currentTime,
+                duration: Number.isFinite(video.duration) ? video.duration : null,
+                videoWidth: video.videoWidth,
+                videoHeight: video.videoHeight,
+                mediaErrorCode: video.error?.code ?? null,
+                playError: state.playError ?? null
+              }
+            }));
+          };
+
+          for (const eventName of [
+            "loadstart",
+            "loadedmetadata",
+            "loadeddata",
+            "canplay",
+            "playing",
+            "waiting",
+            "stalled",
+            "suspend",
+            "ended"
+          ]) {
+            video.addEventListener(eventName, () => report(eventName));
+          }
+          video.addEventListener("error", () => report("error"));
+
+          video.crossOrigin = "anonymous";
           video.src = src;
           video.loop = source.loop !== false;
           video.muted = source.muted !== false;
+          video.autoplay = true;
           video.playsInline = true;
+          video.setAttribute("playsinline", "");
           video.preload = "auto";
-          video.crossOrigin = "anonymous";
+
           const texture = new T3.VideoTexture(video);
           if ("colorSpace" in texture && T3.SRGBColorSpace) texture.colorSpace = T3.SRGBColorSpace;
-          void video.play().catch(() => {});
-          return { texture, video };
+
+          const tryPlay = () => {
+            void video.play().then(() => {
+              report("playing");
+            }).catch((error) => {
+              state.playError = error instanceof Error ? error.message : String(error);
+              report("play-error");
+            });
+          };
+          video.addEventListener("canplay", tryPlay, { once: true });
+          video.load();
+          tryPlay();
+          return { texture, video, videoState: state, sourceUrl: src };
         }
         const texture = new T3.TextureLoader().load(src);
         if ("colorSpace" in texture && T3.SRGBColorSpace) texture.colorSpace = T3.SRGBColorSpace;
-        return { texture };
+        return { texture, sourceUrl: src };
       }
 
       function disposeActiveMediaEnvelope() {
