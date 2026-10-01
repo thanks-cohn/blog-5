@@ -43,6 +43,9 @@ The engine currently supports:
 - programmable playback sequences/pools
 - style/edit snapshots
 - spatial collision envelopes
+- generic spatial media-envelope programs and bindings
+- song-triggered concave media spheres with curved image/video tiles
+- timed/threshold media choreography
 - GLB runtime/debug inspection hooks
 - edit-layer camera controls
 
@@ -911,6 +914,122 @@ The complete `SpatialEnvelopeConfig` contract is defined by the spatial-envelope
 
 ---
 
+# 16A. Spatial Media Envelopes
+
+Spatial Media Envelopes are generic spatial-performance programs. The current renderer implements an inward-facing spherical envelope with curved media tiles; the first automatic trigger adapter is song playback, but direct activation and the binding model are intentionally trigger-agnostic.
+
+## Program methods
+
+`listMediaEnvelopePrograms()` returns detached program definitions.
+
+`getMediaEnvelopeProgram(id)` returns one program or `null`.
+
+`setMediaEnvelopeProgram(program)` creates/replaces a runtime program. Programs require a stable `id`.
+
+`removeMediaEnvelopeProgram(id)` removes a program and bindings that reference it. If the removed program is active, its renderer resources are torn down.
+
+## Binding methods
+
+`listMediaEnvelopeBindings()` returns current trigger bindings.
+
+`setMediaEnvelopeBinding(binding)` creates/replaces a binding.
+
+`removeMediaEnvelopeBinding(id)` removes one binding.
+
+`bindSongToMediaEnvelope(trackId, programId, bindingId?)` is the first convenience adapter. It creates a binding whose trigger is `{type:"song", trackId}`.
+
+The contract is not limited to music. The public trigger type already reserves object-focus, station-enter, journey-progress, event, and custom trigger shapes for future adapters. Only song matching is automatically executed by the current runtime.
+
+## Runtime methods
+
+`activateMediaEnvelope(programId, context?)` directly activates a program. This is the generic path and does not require a song.
+
+`deactivateMediaEnvelope()` tears down the active envelope.
+
+`getActiveMediaEnvelopeState()` returns the same JSON-serializable runtime state exposed by Deep Debug.
+
+## Current sphere behavior
+
+The current v1 renderer:
+
+- resolves the origin from the focused object (or station center)
+- computes a radius large enough to contain the current and next main-panel regions plus configurable padding/panel allowance
+- creates curved, tessellated media patches on the sphere surface
+- places the patches in an even spherical grid centered on the current camera/focus direction
+- keeps tile vertical orientation stable against world-up
+- avoids configurable angular protected regions for the current and next main panels
+- supports image and video textures
+- grows the whole envelope into view
+- supports `promote` / `scale`, `fade-others`, `hide-others`, `fade`, and `hide` choreography cues
+- may trigger cues from song time and from a media-scale threshold
+- pauses/disposes media and geometry when the envelope deactivates
+
+Discovered image/video assets under `apps/playground/src/assets/**` are available by file name/path through the media catalog embedded into the presentation runtime.
+
+### Minimal example
+
+```js
+const api = window.webrevPresentationSettings;
+
+api.setMediaEnvelopeProgram({
+  id: "memory-sphere",
+  envelope: {
+    shape: "sphere",
+    origin: { mode: "focused-object" },
+    growth: { mode: "timed", durationMs: 1200, easing: "easeOutCubic" }
+  },
+  coverage: {
+    include: ["current-main-panel", "next-main-panel"],
+    padding: 3,
+    panelAllowance: 4
+  },
+  protectedRegions: [
+    { target: "current-main-panel", mode: "avoid", angularRadiusDeg: 18 },
+    { target: "next-main-panel", mode: "avoid", angularRadiusDeg: 18 }
+  ],
+  layout: {
+    mode: "grid",
+    rows: 3,
+    columns: 5,
+    horizontalArcDeg: 150,
+    verticalArcDeg: 80,
+    gapDeg: 4
+  },
+  media: [
+    { id: "a", type: "video", src: "a.mp4", loop: true, muted: true },
+    { id: "b", type: "image", src: "b.webp" }
+  ],
+  choreography: {
+    clock: "binding",
+    cues: [
+      { at: 18.5, action: "promote", mediaId: "b", targetScale: 3.4, durationMs: 1700 },
+      {
+        at: 18.5,
+        action: "fade-others",
+        except: ["b"],
+        when: { source: "media-scale", mediaId: "b", gte: 1.7 },
+        durationMs: 700
+      }
+    ]
+  }
+});
+
+api.bindSongToMediaEnvelope("example-song.mp3", "memory-sphere");
+```
+
+Authored project configuration uses the top-level arrays:
+
+```json
+{
+  "mediaEnvelopePrograms": [],
+  "mediaEnvelopeBindings": []
+}
+```
+
+The full architectural direction is documented in `docs/proposals/GENERAL_SPATIAL_MEDIA_ENVELOPES_AND_CHOREOGRAPHED_SURFACE_MEDIA.md`.
+
+---
+
 # 17. GLB Runtime Status and Debugging
 
 ## `setGlbDebugGlobe(enabled, objectName?)`
@@ -1052,6 +1171,7 @@ The current API should evolve toward those features without breaking the simple 
 - `docs/proposals/MUSIC_FLOW_COMPOSABLE_PLAYBACK_ORCHESTRATION.md`
 - `docs/proposals/MANIFEST_DRIVEN_EDIT_AND_PRESENTATION_MODES.md`
 - `docs/proposals/JOURNEY_SEGMENT_EFFECTS_AND_SPATIAL_ENVIRONMENT_SPHERES.md`
+- `docs/proposals/GENERAL_SPATIAL_MEDIA_ENVELOPES_AND_CHOREOGRAPHED_SURFACE_MEDIA.md`
 
 
 ---
@@ -1118,6 +1238,11 @@ All methods below are properties of `window.webrevPresentationSettings`. Getters
 | `saveSettings` | none; style snapshot/null | Requires style exploration; persists ordinary settings and emits `webrev:style-snapshot-ready`. |
 | `getStyleSnapshot` | none; object/null | Read generated schema-1 snapshot only when style exploration is enabled. |
 | `downloadStyleSnapshot` | none; boolean | Creates and clicks a JSON download; false outside exploration mode. |
+| `list/get/set/removeMediaEnvelopeProgram` | program id/program; detached program(s), boolean on remove | Runtime program registry. Set/remove emit `webrev:media-envelope-program-changed`. Removing an active program deactivates it and removes referencing bindings. |
+| `list/set/removeMediaEnvelopeBinding` | binding/id; detached binding(s), boolean on remove | Runtime binding registry. Mutators emit `webrev:media-envelope-binding-changed`. |
+| `bindSongToMediaEnvelope` | track id, program id, optional binding id; binding | Convenience creator for a `song` trigger binding. |
+| `activate/deactivateMediaEnvelope` | program id + optional context / none; boolean / void | Direct generic runtime control. Activation creates the current sphere/tile resources; deactivation disposes them. |
+| `getActiveMediaEnvelopeState` | none; `MediaEnvelopeRuntimeState` | Read live resolved radius/origin/tile/cue state. |
 | `get/setSpatialEnvelope` | name / name+partial config; config/null or void | Mutator normalizes, persists/event `webrev:spatial-envelope`. |
 | `setEnvelopeDebug` | name, visible; void | Convenience envelope patch. |
 | `setGlbDebugGlobe` | enabled, optional object; void | Updates/persists settings via publication. |
@@ -1143,6 +1268,26 @@ type FocusPlaybackMode = "zone-cycle" | "loop-item";
 type FocusPlaybackScope = "station" | "all";
 type FocusPlaybackOrder = "ordered" | "random";
 type PlaneTravelMode = "teleport" | "roller-coaster" | "custom";
+type MediaEnvelopeTrigger =
+  | {type:"song"; trackId:string}
+  | {type:"object-focus"; assetName:string}
+  | {type:"station-enter"; stationId:string}
+  | {type:"journey-progress"; segmentId:string; gte:number}
+  | {type:"event"; eventName:string}
+  | {type:"custom"; resolverId:string; options?:Record<string,unknown>};
+type MediaEnvelopeMediaSource = {id:string; type:"video"|"image"; src:string; loop?:boolean; muted?:boolean; opacity?:number};
+type MediaEnvelopeBinding = {id:string; trigger:MediaEnvelopeTrigger; programId:string; priority?:number};
+type MediaEnvelopeProgram = {
+  id:string;
+  envelope?:{shape?:"sphere"; origin?:{mode?:"focused-object"|"station-center"; offset?:{x:number;y:number;z:number}}; growth?:{mode?:"instant"|"timed"; durationMs?:number; easing?:"linear"|"easeOutCubic"}};
+  coverage?:{include?:Array<"current-main-panel"|"next-main-panel">; padding?:number; panelAllowance?:number; minRadius?:number};
+  surface?:{side?:"inside"; orientation?:{mode?:"upright-to-world"|"surface-native"}};
+  protectedRegions?:Array<{target:"current-main-panel"|"next-main-panel"; mode?:"avoid"; angularRadiusDeg?:number; paddingPx?:number}>;
+  layout?:{mode?:"grid"|"hero"|"grid-with-hero"; rows?:number; columns?:number; horizontalArcDeg?:number; verticalArcDeg?:number; gapDeg?:number; tileAngularWidthDeg?:number; tileAngularHeightDeg?:number};
+  media?:MediaEnvelopeMediaSource[];
+  choreography?:{clock?:"binding"; cues?:Array<Record<string,unknown>>};
+};
+type MediaEnvelopeRuntimeState = {active:boolean; bindingId?:string; programId?:string; trigger?:Record<string,unknown>; stationId?:string; focusedAssetName?:string; resolvedRadius?:number; origin?:{x:number;y:number;z:number}; clockSeconds?:number; tileCount?:number; tiles?:Array<Record<string,unknown>>; activeCues?:string[]};
 type UnpairedGlbCountPolicy = number | "all" | {mode:"range"; min:number; max:number};
 type PlanePreviewPolicy = {showGlbs:boolean; maxGlbs:number|"all"; representation?:"glb"|"icon"};
 type RandomGlbDiversityPolicy = {avoidWithinRun:boolean; avoidAdjacent:boolean; recentPlaneMultipliers:Record<number,number>};
@@ -1280,11 +1425,12 @@ interface WebRevDebugApiV1 {
   getRendererDebugState(): object;
   getAudioDebugState(): object;
   getRandomizationDebugState(): object;
+  getMediaEnvelopeDebugState(): MediaEnvelopeRuntimeState;
   getGlbSelectionDebugState(stationId?: string): object | null;
 }
 ```
 
-The snapshot currently includes capture time/route/viewport; every plane and its identity/center/navigation flags/preview policy/resource residency/random sample; every layout object with local/world/latest-screen position, size/spin/hemisphere/visibility, motion/anchor/envelope/bounds, focus/audio/exclusion and GLB load/residency data; camera pose/target/arrival; derived travel state; journey cursor/counters/residency/pending entry; audio element and history; randomization policy/history; GLB selection-decision traces; and renderer counts/context status.
+The snapshot currently includes capture time/route/viewport; every plane and its identity/center/navigation flags/preview policy/resource residency/random sample; every layout object with local/world/latest-screen position, size/spin/hemisphere/visibility, motion/anchor/envelope/bounds, focus/audio/exclusion and GLB load/residency data; camera pose/target/arrival; derived travel state; journey cursor/counters/residency/pending entry; audio element and history; randomization policy/history; GLB selection-decision traces; active spatial media-envelope state (binding/program, trigger, resolved origin/radius, tile transforms/opacities and active cues); and renderer counts/context status.
 
 ### GLB selection explanation trace
 
@@ -1323,7 +1469,7 @@ A future schema v2 should add stable `build/revision`, per-value `{value,source}
 | Travel | Teleport, rail interpolation, cancelable custom hook | Stable provider interface, effects segments, complete progress telemetry |
 | Music | Pairing, exclusions, fallback history, transition probability/weight pools | Nested playlists, conditions/modifiers/branches/explanation ledger |
 | Manifest | Presentation schema 2 config plus schema-1 style export | Validated portable import/publish manifest and migrations |
-| Rendering | Canvas + isolated Three resources, status events | Exact frame graph, stale-resource accounting, environment spheres |
+| Rendering | Canvas + isolated Three resources, status events, active spherical media envelopes with curved image/video tiles | Exact frame graph, stale-resource accounting, arbitrary/custom envelope shapes and full environment-volume authoring |
 | Debug | Read-only `webrevDebug` schema 1 with GLB population decision traces | Subscription, broader song/transition provenance and decision traces, auth/redaction policy |
 | Karaoke/effects | None in live renderer | Portable timed-performance format, warped credit plane, segment effects |
 
