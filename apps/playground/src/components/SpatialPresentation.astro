@@ -416,6 +416,10 @@ const runtimeConfig = {
         setAssetMotion(name: string, motion: ObjectMotion): void;
         getAssetFocusAudio(name: string): { track: string } | null;
         setAssetFocusAudio(name: string, patch: { track?: string }): void;
+        getAssetTrackExclusions(name: string): string[];
+        setAssetTrackExclusions(name: string, tracks: string[]): string[];
+        addAssetTrackExclusion(name: string, track: string): string[];
+        removeAssetTrackExclusion(name: string, track: string): string[];
         getUnpairedGlbLimit(stationId?: string): number | "all";
         setUnpairedGlbLimit(limit: number | "all", stationId?: string): number | "all";
         getFallbackSongHistoryWindow(): number;
@@ -713,6 +717,7 @@ const runtimeConfig = {
     const assetStationStorageKey = "webrev:asset-station:v1";
     const assetMotionStorageKey = "webrev:asset-motion:v1";
     const assetFocusAudioStorageKey = "webrev:asset-focus-audio:v1";
+    const assetTrackExclusionsStorageKey = "webrev:asset-track-exclusions:v1";
     const spatialEnvelopeStorageKey = "webrev:spatial-envelope:v1";
     const styleExplorationStorageKey = "webrev:style-exploration:v1";
     const journeyClickStartStorageKey = "webrev:journey-click-start:v1";
@@ -841,6 +846,7 @@ const runtimeConfig = {
         presentation: config?.title ?? "presentation",
         assetStations: JSON.parse(JSON.stringify(assetStationState ?? {})),
         assetFocusAudio: JSON.parse(JSON.stringify(assetFocusAudioState ?? {})),
+        assetTrackExclusions: JSON.parse(JSON.stringify(assetTrackExclusionsState ?? {})),
         assetPlacement: JSON.parse(JSON.stringify(assetPlacement ?? {})),
         assetMotion: JSON.parse(JSON.stringify(assetMotionState ?? {})),
         spatialEnvelope: JSON.parse(JSON.stringify(spatialEnvelopeState ?? {})),
@@ -1018,6 +1024,50 @@ const runtimeConfig = {
     }
 
     let assetFocusAudioState = loadAssetFocusAudioState();
+
+    function loadAssetTrackExclusionsState() {
+      let stored: Record<string, unknown> = {};
+      try {
+        stored = JSON.parse(
+          window.localStorage.getItem(assetTrackExclusionsStorageKey) ?? "{}"
+        );
+      } catch {}
+
+      const validTracks = new Set(
+        (Array.isArray(config.musicTracks) ? config.musicTracks : [])
+          .map((track: any) => typeof track?.name === "string" ? track.name : "")
+          .filter(Boolean)
+      );
+
+      const state: Record<string, string[]> = {};
+      for (const asset of allSceneAssetNames()) {
+        if (asset.kind !== "3d") continue;
+        const saved = Array.isArray(stored?.[asset.name])
+          ? stored[asset.name] as unknown[]
+          : [];
+        state[asset.name] = Array.from(new Set(
+          saved
+            .filter((track): track is string =>
+              typeof track === "string" && validTracks.has(track)
+            )
+        ));
+      }
+      return state;
+    }
+
+    let assetTrackExclusionsState = loadAssetTrackExclusionsState();
+
+    function saveAssetTrackExclusionsState() {
+      try {
+        window.localStorage.setItem(
+          assetTrackExclusionsStorageKey,
+          JSON.stringify(assetTrackExclusionsState)
+        );
+      } catch {}
+      window.dispatchEvent(new CustomEvent("webrev:asset-track-exclusions", {
+        detail: assetTrackExclusionsState
+      }));
+    }
 
     function saveAssetFocusAudioState() {
       try {
@@ -2991,6 +3041,10 @@ const runtimeConfig = {
         rebuildAssetLayouts();
         if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
       });
+      window.addEventListener("webrev:asset-track-exclusions", () => {
+        syncLiveFocusAudio();
+        if (settingsPanel && !settingsPanel.hidden) renderSphereSettings();
+      });
       window.addEventListener("webrev:asset-focus-audio", () => {
         // Pairing/unpairing a GLB changes whether it participates in the live scene.
         // Rebuild immediately so Settings acts like an activation control.
@@ -4625,15 +4679,22 @@ const runtimeConfig = {
         const assigned =
           assetFocusAudioState[obj.name]?.track ??
           configuredAssetFocusTrack(obj.name);
+        const excludedTracks = new Set(
+          assetTrackExclusionsState[obj.name] ?? []
+        );
 
-        if (assigned) {
+        if (assigned && !excludedTracks.has(assigned)) {
           return catalog.find(
             (track: { name: string; url: string }) => track.name === assigned
           ) ?? null;
         }
 
-        // Unpaired GLBs resolve a fresh fallback every encounter.
-        const fallbackPool = unassignedTracks();
+        // Excluding an assigned song from this object makes this encounter fall
+        // through to the object's fallback resolver without globally unassigning it.
+        const fallbackPool = unassignedTracks().filter(
+          (track: { name: string; url: string }) =>
+            !excludedTracks.has(track.name)
+        );
         if (!fallbackPool.length) return null;
 
         const recent = recentPlayedTrackNames();
